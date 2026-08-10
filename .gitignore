@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.vsix
+.vscode/
+PLAN.md
+AGENTS.md
+.vscode-test/
+coverage/
+.test-tmp/
+.extension-test/

@@ -1,0 +1,186 @@
+{
+  "name": "yf-svn",
+  "displayName": "YF SVN",
+  "description": "面向 Windows 10/11 的 VS Code Subversion 集成。",
+  "version": "1.0.0",
+  "publisher": "yf",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.131.0"
+  },
+  "categories": [
+    "SCM Providers"
+  ],
+  "keywords": [
+    "svn",
+    "subversion",
+    "scm"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onUri"
+  ],
+  "main": "./dist/extension.js",
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -w -p .",
+    "test": "npm run compile && node --test dist/test/**/*.test.js",
+    "package": "npm run compile && npx @vscode/vsce package"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.2.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/vscode": "^1.125.0",
+    "@vscode/vsce": "^3.6.0",
+    "typescript": "^5.9.2"
+  },
+  "contributes": {
+    "submenus": [
+      { "id": "yfSvn.editorContext", "label": "SVN" }
+    ],
+    "colors": [
+      {
+        "id": "yfSvnDecoration.modifiedResourceForeground",
+        "description": "SVN 已修改资源的前景色。",
+        "defaults": { "light": "#0066B8", "dark": "#3794FF", "highContrast": "#3794FF", "highContrastLight": "#0066B8" }
+      },
+      {
+        "id": "yfSvnDecoration.addedResourceForeground",
+        "description": "SVN 已添加资源的前景色。",
+        "defaults": { "light": "#587C0C", "dark": "#81B88B", "highContrast": "#A1E3AD", "highContrastLight": "#374E06" }
+      },
+      {
+        "id": "yfSvnDecoration.untrackedResourceForeground",
+        "description": "SVN 未版本控制资源的前景色。",
+        "defaults": { "light": "#895503", "dark": "#E2C08D", "highContrast": "#E2C08D", "highContrastLight": "#895503" }
+      },
+      {
+        "id": "yfSvnDecoration.deletedResourceForeground",
+        "description": "SVN 已删除或缺失资源的前景色。",
+        "defaults": { "light": "#AD0707", "dark": "#C74E39", "highContrast": "#C74E39", "highContrastLight": "#AD0707" }
+      },
+      {
+        "id": "yfSvnDecoration.renamedResourceForeground",
+        "description": "SVN 已替换资源的前景色。",
+        "defaults": { "light": "#007100", "dark": "#73C991", "highContrast": "#73C991", "highContrastLight": "#007100" }
+      },
+      {
+        "id": "yfSvnDecoration.ignoredResourceForeground",
+        "description": "SVN 已忽略资源的前景色。",
+        "defaults": { "light": "#8E8E90", "dark": "#8C8C8C", "highContrast": "#A7A8A9", "highContrastLight": "#8E8E90" }
+      },
+      {
+        "id": "yfSvnDecoration.conflictingResourceForeground",
+        "description": "SVN 冲突资源的前景色。",
+        "defaults": { "light": "#AD0707", "dark": "#E4676B", "highContrast": "#C74E39", "highContrastLight": "#AD0707" }
+      },
+      {
+        "id": "yfSvnDecoration.externalResourceForeground",
+        "description": "SVN External 资源的前景色。",
+        "defaults": { "light": "#1258A7", "dark": "#8DB9E2", "highContrast": "#8DB9E2", "highContrastLight": "#1258A7" }
+      }
+    ],
+    "commands": [
+      { "command": "yfSvn.refresh", "title": "SVN: 刷新" },
+      { "command": "yfSvn.commit", "title": "SVN: 提交" },
+      { "command": "yfSvn.update", "title": "SVN: 更新" },
+      { "command": "yfSvn.updateFile", "title": "SVN: 更新文件" },
+      { "command": "yfSvn.updateDirectory", "title": "SVN: 更新目录" },
+      { "command": "yfSvn.checkout", "title": "SVN: 检出" },
+      { "command": "yfSvn.add", "title": "SVN: 添加" },
+      { "command": "yfSvn.delete", "title": "SVN: 删除" },
+      { "command": "yfSvn.revert", "title": "SVN: 还原" },
+      { "command": "yfSvn.rename", "title": "SVN: 移动/重命名" },
+      { "command": "yfSvn.ignore", "title": "SVN: 忽略" },
+      { "command": "yfSvn.cleanup", "title": "SVN: 清理工作副本" },
+      { "command": "yfSvn.compare", "title": "SVN: 比较版本" },
+      { "command": "yfSvn.openConflict", "title": "SVN: 打开冲突处理" },
+      { "command": "yfSvn.resolve", "title": "SVN: 标记冲突已解决" },
+      { "command": "yfSvn.log", "title": "SVN: 查看历史" },
+      { "command": "yfSvn.blame", "title": "SVN: 查看逐行追溯" },
+      { "command": "yfSvn.diagnose", "title": "SVN: 诊断" },
+      { "command": "yfSvn.showOutput", "title": "SVN: 显示输出" }
+    ],
+    "menus": {
+      "scm/title": [
+        { "command": "yfSvn.refresh", "when": "scmProvider == yfSvn", "group": "navigation@1" },
+        { "command": "yfSvn.update", "when": "scmProvider == yfSvn", "group": "navigation@2" },
+        { "command": "yfSvn.cleanup", "when": "scmProvider == yfSvn", "group": "2_svn" },
+        { "command": "yfSvn.log", "when": "scmProvider == yfSvn", "group": "2_svn" }
+      ],
+      "scm/resourceState/context": [
+        { "command": "yfSvn.commit", "when": "scmProvider == yfSvn && scmResourceGroup != ignored && scmResourceGroup != externals", "group": "1_commit@1" },
+        { "command": "yfSvn.compare", "when": "scmProvider == yfSvn && scmResourceGroup != unversioned && scmResourceGroup != conflicts", "group": "inline@1" },
+        { "command": "yfSvn.openConflict", "when": "scmProvider == yfSvn && scmResourceGroup == conflicts", "group": "inline@1" },
+        { "command": "yfSvn.add", "when": "scmProvider == yfSvn && scmResourceGroup == unversioned", "group": "inline@2" },
+        { "command": "yfSvn.resolve", "when": "scmProvider == yfSvn && scmResourceGroup == conflicts", "group": "inline@2" },
+        { "command": "yfSvn.revert", "when": "scmProvider == yfSvn && scmResourceGroup != unversioned && scmResourceGroup != ignored", "group": "2_svn@1" },
+        { "command": "yfSvn.delete", "when": "scmProvider == yfSvn && scmResourceGroup != ignored", "group": "2_svn@2" },
+        { "command": "yfSvn.rename", "when": "scmProvider == yfSvn && scmResourceGroup != ignored", "group": "2_svn@3" },
+        { "command": "yfSvn.ignore", "when": "scmProvider == yfSvn && scmResourceGroup == unversioned", "group": "2_svn@4" },
+        { "command": "yfSvn.log", "when": "scmProvider == yfSvn && scmResourceGroup != unversioned", "group": "3_history@1" },
+        { "command": "yfSvn.blame", "when": "scmProvider == yfSvn && scmResourceGroup != unversioned", "group": "3_history@2" }
+      ],
+      "explorer/context": [
+        { "command": "yfSvn.updateFile", "when": "resourceScheme == file && !explorerResourceIsFolder", "group": "svn@1" },
+        { "command": "yfSvn.updateDirectory", "when": "resourceScheme == file && explorerResourceIsFolder", "group": "svn@1" },
+        { "command": "yfSvn.add", "when": "resourceScheme == file", "group": "svn@2" },
+        { "command": "yfSvn.compare", "when": "resourceScheme == file", "group": "svn@3" },
+        { "command": "yfSvn.log", "when": "resourceScheme == file", "group": "svn@4" },
+        { "command": "yfSvn.blame", "when": "resourceScheme == file", "group": "svn@5" }
+      ],
+      "editor/context": [
+        { "submenu": "yfSvn.editorContext", "when": "resourceScheme == file", "group": "9_cutcopypaste@100" }
+      ],
+      "yfSvn.editorContext": [
+        { "command": "yfSvn.updateFile", "group": "1_update@1" },
+        { "command": "yfSvn.add", "group": "2_local@1" },
+        { "command": "yfSvn.compare", "group": "3_history@1" },
+        { "command": "yfSvn.log", "group": "3_history@2" },
+        { "command": "yfSvn.blame", "group": "3_history@3" }
+      ]
+    },
+    "configuration": {
+      "title": "YF SVN",
+      "properties": {
+        "yfSvn.path": {
+          "type": "string",
+          "default": "svn",
+          "description": "svn.exe 的完整路径或可执行文件名。"
+        },
+        "yfSvn.autoRefresh": {
+          "type": "boolean",
+          "default": true,
+          "description": "保存文件和重新聚焦窗口后自动刷新 SVN 状态。"
+        },
+        "yfSvn.statusDepth": {
+          "type": "string",
+          "enum": ["empty", "files", "immediates", "infinity"],
+          "default": "infinity",
+          "description": "扫描工作副本状态时使用的深度。"
+        },
+        "yfSvn.ignoreExternals": {
+          "type": "boolean",
+          "default": false,
+          "description": "更新和检出时忽略 externals。"
+        },
+        "yfSvn.logLimit": {
+          "type": "integer",
+          "default": 50,
+          "minimum": 10,
+          "maximum": 500,
+          "description": "每次加载的历史记录数量。"
+        },
+        "yfSvn.timeout": {
+          "type": "integer",
+          "default": 120000,
+          "minimum": 5000,
+          "maximum": 1800000,
+          "description": "SVN 命令超时时间，单位为毫秒。"
+        }
+      }
+    }
+  }
+}
