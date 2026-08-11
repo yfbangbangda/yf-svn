@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
+import * as path from 'node:path';
 import test from 'node:test';
-import { parseBlameXml, parseInfoXml, parseLogXml, parseStatusXml } from '../xml';
+import {
+  parseBlameXml,
+  parseInfoXml,
+  parseLogXml,
+  parsePropertyNamesXml,
+  parseStatusXml
+} from '../xml';
 
 test('parseStatusXml 能解析中文路径和冲突状态', () => {
   const xml =
@@ -10,6 +17,21 @@ test('parseStatusXml 能解析中文路径和冲突状态', () => {
   assert.equal(entries[0]?.item, 'modified');
   assert.equal(entries[0]?.treeConflicted, true);
   assert.equal(entries[0]?.absolutePath, 'D:\\工作副本\\目录\\a.php');
+});
+
+test('parseStatusXml 能解析 Changelist 分组', () => {
+  const xml = `<?xml version="1.0"?><status><target path="."/><changelist name="紧急修复"><entry path="src/a.ts"><wc-status item="modified" props="none" revision="8"/></entry></changelist></status>`;
+  const entries = parseStatusXml(xml, 'C:\\work');
+
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]?.changelist, '紧急修复');
+  assert.equal(entries[0]?.absolutePath, path.resolve('C:\\work', 'src/a.ts'));
+});
+
+test('parsePropertyNamesXml 能解析并去重属性名称', () => {
+  const xml = `<?xml version="1.0"?><properties><target path="."><property name="svn:ignore"/><property name="custom:review"/><property name="svn:ignore"/></target></properties>`;
+
+  assert.deepEqual(parsePropertyNamesXml(xml), ['custom:review', 'svn:ignore']);
 });
 
 test('parseInfoXml 能解析工作副本信息', () => {

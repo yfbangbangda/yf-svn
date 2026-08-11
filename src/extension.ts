@@ -5,7 +5,7 @@ import { extractResourceUris, SvnManager } from './manager';
 import { SvnCli } from './svnCli';
 
 /**
- * 激活 YF SVN 扩展并注册 P0 命令。
+ * 激活 YF SVN 扩展并注册核心与 1.1.0 命令。
  *
  * @param context VS Code 扩展上下文。
  */
@@ -29,8 +29,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('yfSvn.commit', (...args: unknown[]) =>
       withRepository(manager, args, (repository, resources) => repository.commit(resources))
     ),
+    vscode.commands.registerCommand('yfSvn.commitAll', (...args: unknown[]) =>
+      // 关键逻辑：参数仅用于定位当前工作副本，提交范围由 Repository 收集并交给用户勾选。
+      withRepository(manager, args, (repository) => repository.commit())
+    ),
     vscode.commands.registerCommand('yfSvn.update', (...args: unknown[]) =>
       withRepository(manager, args, (repository) => repository.update())
+    ),
+    vscode.commands.registerCommand('yfSvn.branchTag', (...args: unknown[]) =>
+      withRepository(manager, args, (repository) => repository.branchOrTag())
+    ),
+    vscode.commands.registerCommand('yfSvn.switch', (...args: unknown[]) =>
+      withRepository(manager, args, (repository) => repository.switchBranch())
     ),
     vscode.commands.registerCommand('yfSvn.updateFile', (...args: unknown[]) =>
       withRepository(
@@ -67,6 +77,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand('yfSvn.ignore', (...args: unknown[]) =>
       withRepository(manager, args, (repository, resources) => repository.ignore(resources), true)
+    ),
+    vscode.commands.registerCommand('yfSvn.lock', (...args: unknown[]) =>
+      withRepository(manager, args, (repository, resources) => repository.lock(resources), true)
+    ),
+    vscode.commands.registerCommand('yfSvn.unlock', (...args: unknown[]) =>
+      withRepository(manager, args, (repository, resources) => repository.unlock(resources), true)
+    ),
+    vscode.commands.registerCommand('yfSvn.property', (...args: unknown[]) =>
+      withRepository(
+        manager,
+        args,
+        (repository, resources) => repository.manageProperty(resources[0]!),
+        true
+      )
+    ),
+    vscode.commands.registerCommand('yfSvn.changelist', (...args: unknown[]) =>
+      withRepository(
+        manager,
+        args,
+        (repository, resources) => repository.assignChangelist(resources),
+        true
+      )
     ),
     vscode.commands.registerCommand('yfSvn.cleanup', (...args: unknown[]) =>
       withRepository(manager, args, (repository) => repository.cleanup())

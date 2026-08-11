@@ -82,12 +82,26 @@ function toStatus(value: unknown): SvnItemStatus {
  */
 export function parseStatusXml(xml: string, workingDirectory: string): readonly SvnStatusEntry[] {
   const document = parser.parse(xml) as {
-    status?: { target?: { entry?: unknown } | readonly { entry?: unknown }[] };
+    status?: {
+      target?: { entry?: unknown } | readonly { entry?: unknown }[];
+      changelist?:
+        | { name?: unknown; entry?: unknown }
+        | readonly { name?: unknown; entry?: unknown }[];
+    };
   };
-  const targets = asArray(document.status?.target);
+  const containers = [
+    ...asArray(document.status?.target).map((target) => ({ target })),
+    ...asArray(document.status?.changelist).map((target) => ({
+      target,
+      changelist: String(target.name ?? '') || undefined
+    }))
+  ];
   const result: SvnStatusEntry[] = [];
 
-  for (const target of targets) {
+  for (const container of containers) {
+    const target = container.target;
+    const changelist =
+      'changelist' in container ? (container.changelist as string | undefined) : undefined;
     const entries = asArray((target as { entry?: unknown }).entry) as readonly Record<string, unknown>[];
     for (const entry of entries) {
       const wcStatus = (entry['wc-status'] ?? {}) as Record<string, unknown>;
@@ -96,6 +110,7 @@ export function parseStatusXml(xml: string, workingDirectory: string): readonly 
         absolutePath: path.resolve(workingDirectory, entryPath),
         item: toStatus(wcStatus.item),
         propertyStatus: toStatus(wcStatus.props),
+        changelist,
         revision: wcStatus.revision === undefined ? undefined : String(wcStatus.revision),
         treeConflicted: String(wcStatus['tree-conflicted'] ?? 'false') === 'true',
         switched: String(wcStatus.switched ?? 'false') === 'true',
@@ -104,6 +119,31 @@ export function parseStatusXml(xml: string, workingDirectory: string): readonly 
     }
   }
   return result;
+}
+
+/**
+ * 解析 `svn proplist --xml` 输出中的属性名称。
+ *
+ * @param xml SVN 属性列表 XML。
+ * @returns 去重并按名称排序的属性名称。
+ */
+export function parsePropertyNamesXml(xml: string): readonly string[] {
+  const document = parser.parse(xml) as {
+    properties?: {
+      target?: { property?: unknown } | readonly { property?: unknown }[];
+    };
+  };
+  const names = new Set<string>();
+  for (const target of asArray(document.properties?.target)) {
+    const properties = asArray(target.property) as readonly Record<string, unknown>[];
+    for (const property of properties) {
+      const name = String(property.name ?? '').trim();
+      if (name) {
+        names.add(name);
+      }
+    }
+  }
+  return [...names].sort((left, right) => left.localeCompare(right));
 }
 
 /**

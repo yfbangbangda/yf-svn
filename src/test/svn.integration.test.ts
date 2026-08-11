@@ -4,7 +4,13 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseBlameXml, parseInfoXml, parseLogXml, parseStatusXml } from '../xml';
+import {
+  parseBlameXml,
+  parseInfoXml,
+  parseLogXml,
+  parsePropertyNamesXml,
+  parseStatusXml
+} from '../xml';
 
 /**
  * 执行集成测试所需的 SVN 命令并返回 UTF-8 文本。
@@ -47,11 +53,68 @@ test('SVN CLI 核心闭环支持含空格的路径', (context) => {
   writeFileSync(path.join(seed, fileName), '初始内容\r\n', 'utf8');
   run('svnadmin', ['create', repository], testRoot);
   const repositoryUrl = pathToFileURL(repository).href;
-  run('svn', ['import', seed, repositoryUrl, '-m', '初始化', '--non-interactive'], testRoot);
-  run('svn', ['checkout', repositoryUrl, firstWorkingCopy, '--non-interactive'], testRoot);
-  run('svn', ['checkout', repositoryUrl, secondWorkingCopy, '--non-interactive'], testRoot);
+  const trunkUrl = `${repositoryUrl}/trunk`;
+  const branchUrl = `${repositoryUrl}/branches/release-1.1`;
+  run(
+    'svn',
+    [
+      'mkdir',
+      `${repositoryUrl}/trunk`,
+      `${repositoryUrl}/branches`,
+      `${repositoryUrl}/tags`,
+      '-m',
+      '初始化目录',
+      '--parents',
+      '--non-interactive'
+    ],
+    testRoot
+  );
+  run('svn', ['import', seed, trunkUrl, '-m', '初始化内容', '--non-interactive'], testRoot);
+  run('svn', ['checkout', trunkUrl, firstWorkingCopy, '--non-interactive'], testRoot);
+  run('svn', ['checkout', trunkUrl, secondWorkingCopy, '--non-interactive'], testRoot);
 
-  appendFileSync(path.join(firstWorkingCopy, fileName), '来自工作副本一\r\n', 'utf8');
+  const firstFile = path.join(firstWorkingCopy, fileName);
+  run('svn', ['lock', '-m', '集成测试锁', '--', firstFile], firstWorkingCopy);
+  run('svn', ['unlock', '--', firstFile], firstWorkingCopy);
+
+  run('svn', ['propset', 'custom:review', 'approved', '--', firstFile], firstWorkingCopy);
+  const propertyXml = run('svn', ['proplist', '--xml', '--', firstFile], firstWorkingCopy);
+  assert.ok(parsePropertyNamesXml(propertyXml).includes('custom:review'));
+  run('svn', ['propdel', 'custom:review', '--', firstFile], firstWorkingCopy);
+
+  run('svn', ['changelist', '紧急修复', '--', firstFile], firstWorkingCopy);
+  const changelistXml = run('svn', ['status', '--xml', '--', firstWorkingCopy], firstWorkingCopy);
+  assert.equal(
+    parseStatusXml(changelistXml, firstWorkingCopy).find(
+      (entry) => path.basename(entry.absolutePath) === fileName
+    )?.changelist,
+    '紧急修复'
+  );
+  run('svn', ['changelist', '--remove', '--', firstFile], firstWorkingCopy);
+
+  run(
+    'svn',
+    [
+      'copy',
+      '--revision',
+      'HEAD',
+      '--parents',
+      '-m',
+      '创建测试分支',
+      '--',
+      `${trunkUrl}@HEAD`,
+      branchUrl
+    ],
+    testRoot
+  );
+  run('svn', ['switch', '--non-interactive', '--', branchUrl, secondWorkingCopy], testRoot);
+  const switchedInfo = parseInfoXml(
+    run('svn', ['info', '--xml', '--', secondWorkingCopy], secondWorkingCopy)
+  );
+  assert.equal(switchedInfo.url, branchUrl);
+  run('svn', ['switch', '--non-interactive', '--', trunkUrl, secondWorkingCopy], testRoot);
+
+  appendFileSync(firstFile, '来自工作副本一\r\n', 'utf8');
   const statusXml = run(
     'svn',
     ['status', '--xml', '--', firstWorkingCopy],
@@ -150,7 +213,7 @@ test('SVN CLI 核心闭环支持含空格的路径', (context) => {
 
   const logXml = run(
     'svn',
-    ['log', '--xml', '--verbose', '--limit', '10', `${repositoryUrl}@HEAD`],
+    ['log', '--xml', '--verbose', '--limit', '10', `${trunkUrl}@HEAD`],
     firstWorkingCopy
   );
   const logEntries = parseLogXml(logXml);

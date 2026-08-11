@@ -426,6 +426,10 @@ export function extractResourceUris(values: readonly unknown[]): readonly vscode
         result.set(resourceUri.toString(), resourceUri);
       }
     }
+    if (value && typeof value === 'object' && 'resourceStates' in value) {
+      // 关键逻辑：SCM 分组命令传入 ResourceGroup，需要展开其中资源以支持整组提交。
+      visit((value as { readonly resourceStates?: unknown }).resourceStates);
+    }
   }
 
   for (const value of values) {

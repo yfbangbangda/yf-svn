@@ -25,6 +25,7 @@ export interface SvnStatusEntry {
   readonly absolutePath: string;
   readonly item: SvnItemStatus;
   readonly propertyStatus: SvnItemStatus;
+  readonly changelist?: string;
   readonly revision?: string;
   readonly treeConflicted: boolean;
   readonly switched: boolean;
@@ -83,11 +84,23 @@ export interface SvnRepositoryOperations {
   refresh(): Promise<void>;
   commit(resources?: readonly vscode.Uri[]): Promise<void>;
   update(resource?: vscode.Uri): Promise<void>;
+  /** 创建远程分支或标签。 */
+  branchOrTag(): Promise<void>;
+  /** 将工作副本切换到其他仓库 URL。 */
+  switchBranch(): Promise<void>;
   add(resources: readonly vscode.Uri[]): Promise<void>;
   remove(resources: readonly vscode.Uri[]): Promise<void>;
   revert(resources: readonly vscode.Uri[]): Promise<void>;
   rename(resource: vscode.Uri): Promise<void>;
   ignore(resources: readonly vscode.Uri[]): Promise<void>;
+  /** @param resources 要锁定的 SVN 文件。 */
+  lock(resources: readonly vscode.Uri[]): Promise<void>;
+  /** @param resources 要解锁的 SVN 文件。 */
+  unlock(resources: readonly vscode.Uri[]): Promise<void>;
+  /** @param resource 要管理属性的文件或目录。 */
+  manageProperty(resource: vscode.Uri): Promise<void>;
+  /** @param resources 要调整 Changelist 的文件。 */
+  assignChangelist(resources: readonly vscode.Uri[]): Promise<void>;
   cleanup(): Promise<void>;
   compare(resource: vscode.Uri): Promise<void>;
   openConflict(resource: vscode.Uri): Promise<void>;
