@@ -2,10 +2,11 @@ import * as vscode from 'vscode';
 import { SVN_CONTENT_SCHEME, SvnContentProvider } from './contentProvider';
 import { SvnFileDecorationProvider } from './fileDecorationProvider';
 import { extractResourceUris, SvnManager } from './manager';
+import { SVN_MENU_CAPABILITIES } from './menuContext';
 import { SvnCli } from './svnCli';
 
 /**
- * 激活 YF SVN 扩展并注册核心与 1.1.0 命令。
+ * 激活 YF SVN 扩展并注册核心命令。
  *
  * @param context VS Code 扩展上下文。
  */
@@ -22,6 +23,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     fileDecorationProvider,
     vscode.window.registerFileDecorationProvider(fileDecorationProvider),
     vscode.workspace.registerTextDocumentContentProvider(SVN_CONTENT_SCHEME, contentProvider),
+    manager.onDidChangeStatus(() => void updateMenuContexts(manager)),
     vscode.commands.registerCommand('yfSvn.showOutput', () => output.show()),
     vscode.commands.registerCommand('yfSvn.diagnose', () => manager.diagnose()),
     vscode.commands.registerCommand('yfSvn.checkout', () => manager.checkout()),
@@ -136,6 +138,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   await manager.discover();
+  await updateMenuContexts(manager);
 }
 
 /**
@@ -143,6 +146,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
  */
 export function deactivate(): void {
   // VS Code 会自动释放 context.subscriptions 中注册的全部资源。
+}
+
+/**
+ * 把最新 SVN 状态写入 VS Code context key，供资源管理器和编辑器菜单过滤。
+ *
+ * @param manager SVN 工作副本管理器。
+ */
+async function updateMenuContexts(manager: SvnManager): Promise<void> {
+  const resources = manager.getMenuContextResources();
+  await Promise.all(
+    SVN_MENU_CAPABILITIES.map((capability) =>
+      vscode.commands.executeCommand(
+        'setContext',
+        `yfSvn.${capability}Resources`,
+        resources[capability]
+      )
+    )
+  );
 }
 
 /**

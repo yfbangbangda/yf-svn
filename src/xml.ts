@@ -114,7 +114,8 @@ export function parseStatusXml(xml: string, workingDirectory: string): readonly 
         revision: wcStatus.revision === undefined ? undefined : String(wcStatus.revision),
         treeConflicted: String(wcStatus['tree-conflicted'] ?? 'false') === 'true',
         switched: String(wcStatus.switched ?? 'false') === 'true',
-        copied: String(wcStatus.copied ?? 'false') === 'true'
+        copied: String(wcStatus.copied ?? 'false') === 'true',
+        locked: wcStatus.lock !== undefined
       });
     }
   }

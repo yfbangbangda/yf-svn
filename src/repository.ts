@@ -3,6 +3,11 @@ import * as vscode from 'vscode';
 import { containsConflictMarkers, extractConflictVersions } from './conflict';
 import { createSvnContentUri } from './contentProvider';
 import { RefreshQueue } from './refreshQueue';
+import {
+  getSvnMenuCapabilities,
+  SVN_MENU_CAPABILITIES,
+  SvnMenuCapability
+} from './menuContext';
 import { SvnCli, SvnCommandError } from './svnCli';
 import { isDecoratedStatus } from './statusDecoration';
 import {
@@ -94,6 +99,46 @@ export class SvnRepository implements SvnRepositoryOperations {
   public getStatus(resource: vscode.Uri): SvnStatusEntry | undefined {
     const status = this.statusByPath.get(path.normalize(resource.fsPath).toLowerCase());
     return status && isDecoratedStatus(status) ? status : undefined;
+  }
+
+  /**
+   * 返回当前工作副本用于过滤右键菜单的资源集合。
+   *
+   * @returns 按菜单能力分组的资源 URI。
+   */
+  public getMenuContextResources(): Readonly<Record<SvnMenuCapability, readonly vscode.Uri[]>> {
+    const resources = Object.fromEntries(
+      SVN_MENU_CAPABILITIES.map((capability) => [capability, new Map<string, vscode.Uri>()])
+    ) as Record<SvnMenuCapability, Map<string, vscode.Uri>>;
+
+    for (const entry of this.statusByPath.values()) {
+      const uri = vscode.Uri.file(entry.absolutePath);
+      for (const capability of getSvnMenuCapabilities(entry)) {
+        resources[capability].set(uri.toString(), uri);
+      }
+    }
+
+    // 关键逻辑：目录提交和还原取决于其后代状态，因此把后代能力向已版本控制的父目录传播。
+    for (const capability of ['committable', 'revertible'] as const) {
+      for (const uri of [...resources[capability].values()]) {
+        let parent = path.dirname(uri.fsPath);
+        while (this.statusByPath.has(path.normalize(parent).toLowerCase())) {
+          const parentUri = vscode.Uri.file(parent);
+          resources[capability].set(parentUri.toString(), parentUri);
+          if (
+            path.normalize(parent).toLowerCase() ===
+            path.normalize(this.root.fsPath).toLowerCase()
+          ) {
+            break;
+          }
+          parent = path.dirname(parent);
+        }
+      }
+    }
+
+    return Object.fromEntries(
+      SVN_MENU_CAPABILITIES.map((capability) => [capability, [...resources[capability].values()]])
+    ) as unknown as Record<SvnMenuCapability, readonly vscode.Uri[]>;
   }
 
   /**
@@ -1264,7 +1309,7 @@ export class SvnRepository implements SvnRepositoryOperations {
       .getConfiguration('yfSvn')
       .get<string>('statusDepth', 'infinity');
     const result = await this.cli.run(
-      ['status', '--xml', '--no-ignore', '--depth', depth, '--', this.root.fsPath],
+      ['status', '--xml', '--verbose', '--no-ignore', '--depth', depth, '--', this.root.fsPath],
       {
         cwd: this.root.fsPath,
         // 关键逻辑：状态 XML 只用于内部解析，避免大型工作副本把数 MB 内容写入输出日志。

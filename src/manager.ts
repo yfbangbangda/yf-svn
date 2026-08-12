@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import * as vscode from 'vscode';
 import { findNestedWorkingCopyRoots } from './discovery';
+import { SVN_MENU_CAPABILITIES, SvnMenuCapability } from './menuContext';
 import { SvnRepository } from './repository';
 import { SvnCli } from './svnCli';
 import { SvnRepositoryOperations, SvnResourceState } from './types';
@@ -69,6 +70,28 @@ export class SvnManager implements vscode.Disposable {
    * SVN 状态刷新完成时触发。
    */
   public readonly onDidChangeStatus = this.statusChangeEmitter.event;
+
+  /**
+   * 汇总全部工作副本用于过滤右键菜单的资源集合。
+   *
+   * @returns 按菜单能力分组并序列化后的资源 URI。
+   */
+  public getMenuContextResources(): Readonly<Record<SvnMenuCapability, readonly string[]>> {
+    const resources = Object.fromEntries(
+      SVN_MENU_CAPABILITIES.map((capability) => [capability, new Set<string>()])
+    ) as Record<SvnMenuCapability, Set<string>>;
+    for (const repository of this.repositories.values()) {
+      const repositoryResources = repository.getMenuContextResources();
+      for (const capability of SVN_MENU_CAPABILITIES) {
+        for (const uri of repositoryResources[capability]) {
+          resources[capability].add(uri.toString());
+        }
+      }
+    }
+    return Object.fromEntries(
+      SVN_MENU_CAPABILITIES.map((capability) => [capability, [...resources[capability]]])
+    ) as unknown as Record<SvnMenuCapability, readonly string[]>;
+  }
 
   /**
    * 检查运行环境并发现工作区中的顶层及嵌套 SVN 工作副本。
@@ -325,10 +348,12 @@ export class SvnManager implements vscode.Disposable {
    * @param roots 当前有效的工作副本根目录集合。
    */
   private syncRepositories(roots: ReadonlyMap<string, vscode.Uri>): void {
+    let changed = false;
     for (const [key, repository] of this.repositories) {
       if (!roots.has(key)) {
         repository.dispose();
         this.repositories.delete(key);
+        changed = true;
       }
     }
     for (const [key, root] of roots) {
@@ -337,7 +362,12 @@ export class SvnManager implements vscode.Disposable {
           key,
           new SvnRepository(this.cli, root, this.output, () => this.statusChangeEmitter.fire())
         );
+        changed = true;
       }
+    }
+    if (changed) {
+      // 关键逻辑：工作副本新增或移除后立即清理旧菜单状态，后续刷新再写入最新资源。
+      this.statusChangeEmitter.fire();
     }
   }
 
@@ -345,11 +375,15 @@ export class SvnManager implements vscode.Disposable {
    * 清空并释放全部 Repository。
    */
   private clearRepositories(): void {
+    const hadRepositories = this.repositories.size > 0;
     for (const repository of this.repositories.values()) {
       repository.dispose();
     }
     this.repositories.clear();
     this.pendingRefreshRepositories.clear();
+    if (hadRepositories) {
+      this.statusChangeEmitter.fire();
+    }
   }
 
   /**

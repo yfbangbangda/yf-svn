@@ -28,6 +28,13 @@ test('parseStatusXml 能解析 Changelist 分组', () => {
   assert.equal(entries[0]?.absolutePath, path.resolve('C:\\work', 'src/a.ts'));
 });
 
+test('parseStatusXml 能解析工作副本锁状态', () => {
+  const xml = `<?xml version="1.0"?><status><target path="."><entry path="locked.txt"><wc-status item="normal" props="none" revision="8"><lock><token>opaquelocktoken:test</token><owner>tester</owner></lock></wc-status></entry></target></status>`;
+  const entries = parseStatusXml(xml, 'C:\\work');
+
+  assert.equal(entries[0]?.locked, true);
+});
+
 test('parsePropertyNamesXml 能解析并去重属性名称', () => {
   const xml = `<?xml version="1.0"?><properties><target path="."><property name="svn:ignore"/><property name="custom:review"/><property name="svn:ignore"/></target></properties>`;
 

@@ -22,7 +22,8 @@ function status(
     propertyStatus,
     treeConflicted,
     switched: false,
-    copied: false
+    copied: false,
+    locked: false
   };
 }
 

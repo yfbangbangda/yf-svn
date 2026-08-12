@@ -30,6 +30,7 @@ export interface SvnStatusEntry {
   readonly treeConflicted: boolean;
   readonly switched: boolean;
   readonly copied: boolean;
+  readonly locked: boolean;
 }
 
 export type SvnConflictType = 'text' | 'property' | 'tree' | 'unknown';
