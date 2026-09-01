@@ -227,3 +227,59 @@ test('SVN CLI 核心闭环支持含空格的路径', (context) => {
   assert.ok(blameLines.length > 0);
   assert.ok(blameLines.every((line) => line.revision && line.author));
 });
+
+test('SVN CLI 支持目录名含 @ 的工作副本发现与状态扫描', (context) => {
+  if (process.platform !== 'win32') {
+    context.skip('YF SVN 当前仅支持 Windows。');
+    return;
+  }
+  try {
+    run('svn', ['--version', '--quiet'], process.cwd());
+    run('svnadmin', ['--version', '--quiet'], process.cwd());
+  } catch {
+    context.skip('未安装 SVN CLI 或 svnadmin。');
+    return;
+  }
+
+  const testRoot = path.join(process.cwd(), '.test-tmp', `yf svn peg ${Date.now()}`);
+  const repository = path.join(testRoot, 'repo');
+  const seed = path.join(testRoot, 'seed');
+  // 关键逻辑：目录名含 @ 会触发 E205000 peg revision 误解析，验证尾部 @ 转义。
+  const atWorkingCopy = path.join(testRoot, 'project@47.96.177.169');
+  const fileName = 'data file.txt';
+  mkdirSync(seed, { recursive: true });
+  context.after(() => rmSync(testRoot, { recursive: true, force: true }));
+
+  writeFileSync(path.join(seed, fileName), '初始内容\r\n', 'utf8');
+  run('svnadmin', ['create', repository], testRoot);
+  const trunkUrl = `${pathToFileURL(repository).href}/trunk`;
+  run(
+    'svn',
+    ['mkdir', trunkUrl, '-m', '初始化目录', '--parents', '--non-interactive'],
+    testRoot
+  );
+  run('svn', ['import', seed, trunkUrl, '-m', '初始化内容', '--force-log', '--non-interactive'], testRoot);
+  run('svn', ['checkout', trunkUrl, atWorkingCopy, '--non-interactive'], testRoot);
+
+  // 模拟 manager.resolveWorkingCopyRoot：带尾部 @ 转义的路径必须成功解析出工作副本根。
+  const infoXml = run(
+    'svn',
+    ['info', '--xml', '--', `${atWorkingCopy}@`],
+    atWorkingCopy
+  );
+  const info = parseInfoXml(infoXml);
+  assert.equal(path.normalize(info.workingCopyRoot), path.normalize(atWorkingCopy), infoXml);
+
+  // 状态扫描同样需要对含 @ 的根目录使用转义路径。
+  appendFileSync(path.join(atWorkingCopy, fileName), '本地修改\r\n', 'utf8');
+  const statusXml = run(
+    'svn',
+    ['status', '--xml', '--', `${atWorkingCopy}@`],
+    atWorkingCopy
+  );
+  const entries = parseStatusXml(statusXml, atWorkingCopy);
+  assert.equal(
+    entries.find((entry) => path.basename(entry.absolutePath) === fileName)?.item,
+    'modified'
+  );
+});

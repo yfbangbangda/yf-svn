@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import { containsConflictMarkers, extractConflictVersions } from './conflict';
 import { createSvnContentUri } from './contentProvider';
 import { RefreshQueue } from './refreshQueue';
+import { escapeSvnTarget, escapeSvnTargets } from './svnTarget';
 import {
   getSvnMenuCapabilities,
   SVN_MENU_CAPABILITIES,
@@ -232,7 +233,7 @@ export class SvnRepository implements SvnRepositoryOperations {
           // 关键逻辑：允许提交说明与现有文件路径同名，避免 SVN 误判为应使用 -F。
           '--force-log',
           '--',
-          ...targets.map((resource) => resource.fsPath)
+          ...escapeSvnTargets(targets.map((resource) => resource.fsPath))
         ],
         { cwd: this.root.fsPath, token }
       );
@@ -278,7 +279,7 @@ export class SvnRepository implements SvnRepositoryOperations {
     if (vscode.workspace.getConfiguration('yfSvn').get<boolean>('ignoreExternals', false)) {
       args.push('--ignore-externals');
     }
-    args.push('--', target.fsPath);
+    args.push('--', escapeSvnTarget(target.fsPath));
     const relativeTarget = path.relative(this.root.fsPath, target.fsPath) || '整个工作副本';
     const confirmation = await vscode.window.showInformationMessage(
       `确认将 ${relativeTarget} 更新到 ${revision}？`,
@@ -320,7 +321,9 @@ export class SvnRepository implements SvnRepositoryOperations {
       return;
     }
 
-    const infoResult = await this.cli.run(['info', '--xml', '--', this.root.fsPath], {
+    const infoResult = await this.cli.run(
+      ['info', '--xml', '--', escapeSvnTarget(this.root.fsPath)],
+      {
       cwd: this.root.fsPath,
       logStdout: false
     });
@@ -409,7 +412,9 @@ export class SvnRepository implements SvnRepositoryOperations {
    * 将当前工作副本切换到同一仓库中的其他 URL。
    */
   public async switchBranch(): Promise<void> {
-    const infoResult = await this.cli.run(['info', '--xml', '--', this.root.fsPath], {
+    const infoResult = await this.cli.run(
+      ['info', '--xml', '--', escapeSvnTarget(this.root.fsPath)],
+      {
       cwd: this.root.fsPath,
       logStdout: false
     });
@@ -445,7 +450,7 @@ export class SvnRepository implements SvnRepositoryOperations {
     if (vscode.workspace.getConfiguration('yfSvn').get<boolean>('ignoreExternals', false)) {
       args.push('--ignore-externals');
     }
-    args.push('--', destinationUrl.trim(), this.root.fsPath);
+    args.push('--', destinationUrl.trim(), escapeSvnTarget(this.root.fsPath));
     const confirmation = await vscode.window.showWarningMessage(
       '确认切换当前 SVN 工作副本？',
       {
@@ -481,7 +486,9 @@ export class SvnRepository implements SvnRepositoryOperations {
       return;
     }
     await this.runOperation('正在添加 SVN 资源', (token) =>
-      this.cli.run(['add', '--parents', '--', ...resources.map((resource) => resource.fsPath)], {
+      this.cli.run(
+        ['add', '--parents', '--', ...escapeSvnTargets(resources.map((resource) => resource.fsPath))],
+        {
         cwd: this.root.fsPath,
         token
       })
@@ -510,7 +517,7 @@ export class SvnRepository implements SvnRepositoryOperations {
     await this.runOperation('正在删除 SVN 资源', async (token) => {
       if (versioned.length > 0) {
         await this.cli.run(
-          ['delete', '--force', '--', ...versioned.map((resource) => resource.fsPath)],
+          ['delete', '--force', '--', ...escapeSvnTargets(versioned.map((resource) => resource.fsPath))],
           {
             cwd: this.root.fsPath,
             token
@@ -546,7 +553,7 @@ export class SvnRepository implements SvnRepositoryOperations {
     }
     await this.runOperation('正在还原 SVN 更改', (token) =>
       this.cli.run(
-        ['revert', '--depth', 'infinity', '--', ...resources.map((resource) => resource.fsPath)],
+        ['revert', '--depth', 'infinity', '--', ...escapeSvnTargets(resources.map((resource) => resource.fsPath))],
         { cwd: this.root.fsPath, token }
       )
     );
@@ -580,7 +587,9 @@ export class SvnRepository implements SvnRepositoryOperations {
         await vscode.workspace.fs.rename(resource, vscode.Uri.file(destinationPath));
         return;
       }
-      await this.cli.run(['move', '--parents', '--', resource.fsPath, destinationPath], {
+      await this.cli.run(
+        ['move', '--parents', '--', escapeSvnTarget(resource.fsPath), escapeSvnTarget(destinationPath)],
+        {
         cwd: this.root.fsPath,
         token
       });
@@ -622,7 +631,9 @@ export class SvnRepository implements SvnRepositoryOperations {
       for (const [parent, names] of grouped) {
         let currentValue = '';
         try {
-          const existing = await this.cli.run(['propget', property.property, '--', parent], {
+          const existing = await this.cli.run(
+            ['propget', property.property, '--', escapeSvnTarget(parent)],
+            {
             cwd: this.root.fsPath,
             token
           });
@@ -645,7 +656,15 @@ export class SvnRepository implements SvnRepositoryOperations {
         for (const name of names) {
           lines.add(name);
         }
-        await this.cli.run(['propset', property.property, [...lines].join('\n'), '--', parent], {
+        await this.cli.run(
+          [
+            'propset',
+            property.property,
+            [...lines].join('\n'),
+            '--',
+            escapeSvnTarget(parent)
+          ],
+          {
           cwd: this.root.fsPath,
           token
         });
@@ -695,7 +714,7 @@ export class SvnRepository implements SvnRepositoryOperations {
     if (comment.trim()) {
       args.push('--message', comment.trim(), '--force-log');
     }
-    args.push('--', ...resources.map((resource) => resource.fsPath));
+    args.push('--', ...escapeSvnTargets(resources.map((resource) => resource.fsPath)));
     await this.runOperation('正在锁定 SVN 文件', (token) =>
       this.cli.run(args, { cwd: this.root.fsPath, token })
     );
@@ -732,7 +751,7 @@ export class SvnRepository implements SvnRepositoryOperations {
     if (mode.force) {
       args.push('--force');
     }
-    args.push('--', ...resources.map((resource) => resource.fsPath));
+    args.push('--', ...escapeSvnTargets(resources.map((resource) => resource.fsPath)));
     await this.runOperation('正在解锁 SVN 文件', (token) =>
       this.cli.run(args, { cwd: this.root.fsPath, token })
     );
@@ -744,7 +763,9 @@ export class SvnRepository implements SvnRepositoryOperations {
    * @param resource 要管理属性的文件或目录。
    */
   public async manageProperty(resource: vscode.Uri): Promise<void> {
-    const propertyResult = await this.cli.run(['proplist', '--xml', '--', resource.fsPath], {
+    const propertyResult = await this.cli.run(
+      ['proplist', '--xml', '--', escapeSvnTarget(resource.fsPath)],
+      {
       cwd: this.root.fsPath,
       logStdout: false
     });
@@ -793,7 +814,7 @@ export class SvnRepository implements SvnRepositoryOperations {
           return;
         }
         await this.runOperation('正在删除 SVN 属性', (token) =>
-          this.cli.run(['propdel', propertyName, '--', resource.fsPath], {
+          this.cli.run(['propdel', propertyName, '--', escapeSvnTarget(resource.fsPath)], {
             cwd: this.root.fsPath,
             token
           })
@@ -801,7 +822,7 @@ export class SvnRepository implements SvnRepositoryOperations {
         return;
       }
       const valueResult = await this.cli.run(
-        ['propget', '--strict', propertyName, '--', resource.fsPath],
+        ['propget', '--strict', propertyName, '--', escapeSvnTarget(resource.fsPath)],
         { cwd: this.root.fsPath, logStdout: false }
       );
       currentValue = valueResult.stdout;
@@ -821,7 +842,7 @@ export class SvnRepository implements SvnRepositoryOperations {
       escaped === 'n' ? '\n' : '\\'
     );
     await this.runOperation('正在设置 SVN 属性', (token) =>
-      this.cli.run(['propset', propertyName.trim(), propertyValue, '--', resource.fsPath], {
+      this.cli.run(['propset', propertyName.trim(), propertyValue, '--', escapeSvnTarget(resource.fsPath)], {
         cwd: this.root.fsPath,
         token
       })
@@ -866,7 +887,7 @@ export class SvnRepository implements SvnRepositoryOperations {
     const args = selected.remove
       ? ['changelist', '--remove']
       : ['changelist', changelistName!.trim()];
-    args.push('--', ...resources.map((resource) => resource.fsPath));
+    args.push('--', ...escapeSvnTargets(resources.map((resource) => resource.fsPath)));
     await this.runOperation('正在更新 SVN Changelist', (token) =>
       this.cli.run(args, { cwd: this.root.fsPath, token })
     );
@@ -877,7 +898,7 @@ export class SvnRepository implements SvnRepositoryOperations {
    */
   public async cleanup(): Promise<void> {
     await this.runOperation('正在清理 SVN 工作副本', (token) =>
-      this.cli.run(['cleanup', '--', this.root.fsPath], {
+      this.cli.run(['cleanup', '--', escapeSvnTarget(this.root.fsPath)], {
         cwd: this.root.fsPath,
         token
       })
@@ -936,7 +957,7 @@ export class SvnRepository implements SvnRepositoryOperations {
     }
 
     await this.runOperation('正在读取 SVN 冲突信息', async (token) => {
-      const result = await this.cli.run(['info', '--xml', '--', resource.fsPath], {
+      const result = await this.cli.run(['info', '--xml', '--', escapeSvnTarget(resource.fsPath)], {
         cwd: this.root.fsPath,
         token,
         logStdout: false
@@ -1027,7 +1048,7 @@ export class SvnRepository implements SvnRepositoryOperations {
 
       if (conflict?.type === 'property' || status.propertyStatus === 'conflicted') {
         const propertyDiff = await this.cli.run(
-          ['diff', '--properties-only', '--', resource.fsPath],
+          ['diff', '--properties-only', '--', escapeSvnTarget(resource.fsPath)],
           { cwd: this.root.fsPath, token, logStdout: false }
         );
         const document = await vscode.workspace.openTextDocument({
@@ -1132,7 +1153,7 @@ export class SvnRepository implements SvnRepositoryOperations {
           '--accept',
           strategy.label,
           '--',
-          ...resources.map((resource) => resource.fsPath)
+          ...escapeSvnTargets(resources.map((resource) => resource.fsPath))
         ],
         { cwd: this.root.fsPath, token }
       )
@@ -1149,7 +1170,7 @@ export class SvnRepository implements SvnRepositoryOperations {
     const limit = vscode.workspace.getConfiguration('yfSvn').get<number>('logLimit', 50);
     await this.runOperation('正在读取 SVN 历史', async (token) => {
       // 关键逻辑：本地目录 revision 可能停留在旧值，改用 URL@HEAD 避免历史被 peg revision 截断。
-      const infoResult = await this.cli.run(['info', '--xml', '--', target.fsPath], {
+      const infoResult = await this.cli.run(['info', '--xml', '--', escapeSvnTarget(target.fsPath)], {
         cwd: this.root.fsPath,
         token
       });
@@ -1245,7 +1266,7 @@ export class SvnRepository implements SvnRepositoryOperations {
     }
 
     await this.runOperation('正在读取 SVN Blame', async (token) => {
-      const result = await this.cli.run(['blame', '--xml', '--', resource.fsPath], {
+      const result = await this.cli.run(['blame', '--xml', '--', escapeSvnTarget(resource.fsPath)], {
         cwd: this.root.fsPath,
         token,
         logStdout: false
@@ -1309,7 +1330,16 @@ export class SvnRepository implements SvnRepositoryOperations {
       .getConfiguration('yfSvn')
       .get<string>('statusDepth', 'infinity');
     const result = await this.cli.run(
-      ['status', '--xml', '--verbose', '--no-ignore', '--depth', depth, '--', this.root.fsPath],
+      [
+        'status',
+        '--xml',
+        '--verbose',
+        '--no-ignore',
+        '--depth',
+        depth,
+        '--',
+        escapeSvnTarget(this.root.fsPath)
+      ],
       {
         cwd: this.root.fsPath,
         // 关键逻辑：状态 XML 只用于内部解析，避免大型工作副本把数 MB 内容写入输出日志。

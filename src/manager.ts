@@ -6,6 +6,7 @@ import { SVN_MENU_CAPABILITIES, SvnMenuCapability } from './menuContext';
 import { SvnRepository } from './repository';
 import { SvnCli } from './svnCli';
 import { SvnRepositoryOperations, SvnResourceState } from './types';
+import { escapeSvnTarget } from './svnTarget';
 import { parseInfoXml } from './xml';
 
 /**
@@ -212,7 +213,7 @@ export class SvnManager implements vscode.Disposable {
       '--depth',
       depth,
       url.trim(),
-      destination.fsPath
+      escapeSvnTarget(destination.fsPath)
     ];
     if (vscode.workspace.getConfiguration('yfSvn').get<boolean>('ignoreExternals', false)) {
       args.splice(args.length - 2, 0, '--ignore-externals');
@@ -328,18 +329,25 @@ export class SvnManager implements vscode.Disposable {
    * 查询候选目录所属的 SVN 工作副本根目录。
    *
    * @param candidate 候选文件夹路径。
-   * @returns 工作副本根 URI；不是工作副本时返回 undefined。
+   * @returns 工作副本根 URI；不是工作副本或查询失败时返回 undefined。
    */
   private async resolveWorkingCopyRoot(candidate: string): Promise<vscode.Uri | undefined> {
-    const result = await this.cli.run(['info', '--xml', '--', candidate], {
-      cwd: candidate,
-      allowNonWorkingCopy: true
-    });
-    if (result.exitCode !== 0) {
+    try {
+      const result = await this.cli.run(['info', '--xml', '--', escapeSvnTarget(candidate)], {
+        cwd: candidate,
+        allowNonWorkingCopy: true
+      });
+      if (result.exitCode !== 0) {
+        return undefined;
+      }
+      const info = parseInfoXml(result.stdout);
+      return info.workingCopyRoot ? vscode.Uri.file(info.workingCopyRoot) : undefined;
+    } catch (error) {
+      // 关键逻辑：单个候选目录解析失败不应中断其他工作副本的发现，仅跳过并记录。
+      const message = error instanceof Error ? error.message : String(error);
+      this.output.appendLine(`[发现] 跳过无法解析的候选目录 ${candidate}：${message}`);
       return undefined;
     }
-    const info = parseInfoXml(result.stdout);
-    return info.workingCopyRoot ? vscode.Uri.file(info.workingCopyRoot) : undefined;
   }
 
   /**

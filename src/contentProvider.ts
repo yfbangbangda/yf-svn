@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
 import { SvnCli } from './svnCli';
+import { escapeSvnTarget } from './svnTarget';
 
 export const SVN_CONTENT_SCHEME = 'yf-svn';
 
@@ -51,10 +52,14 @@ export class SvnContentProvider implements vscode.TextDocumentContentProvider {
     if (!file || !revision) {
       throw new Error('SVN 虚拟文档缺少文件路径或 revision。');
     }
-    const result = await this.cli.run(['cat', '--revision', revision, '--', file], {
-      cwd: path.dirname(file),
-      token
-    });
+    // 关键逻辑：使用 -- 与尾部 @ 转义，防止路径中的 @ 被解析为 peg revision。
+    const result = await this.cli.run(
+      ['cat', '--revision', revision, '--', escapeSvnTarget(file)],
+      {
+        cwd: path.dirname(file),
+        token
+      }
+    );
     if (result.stdout.includes('\0')) {
       throw new Error('该 SVN revision 是二进制文件，VS Code 文本 Diff 无法显示其内容。');
     }
