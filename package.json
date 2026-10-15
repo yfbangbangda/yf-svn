@@ -2,7 +2,7 @@
   "name": "yf-svn",
   "displayName": "YF SVN",
   "description": "面向 Windows 10/11 的 VS Code Subversion 集成。",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "publisher": "yf",
   "license": "MIT",
   "engines": {
@@ -39,139 +39,464 @@
   },
   "contributes": {
     "submenus": [
-      { "id": "yfSvn.editorContext", "label": "SVN" }
+      {
+        "id": "yfSvn.editorContext",
+        "label": "SVN"
+      }
     ],
     "colors": [
       {
         "id": "yfSvnDecoration.modifiedResourceForeground",
         "description": "SVN 已修改资源的前景色。",
-        "defaults": { "light": "#0066B8", "dark": "#3794FF", "highContrast": "#3794FF", "highContrastLight": "#0066B8" }
+        "defaults": {
+          "light": "#0066B8",
+          "dark": "#3794FF",
+          "highContrast": "#3794FF",
+          "highContrastLight": "#0066B8"
+        }
       },
       {
         "id": "yfSvnDecoration.addedResourceForeground",
         "description": "SVN 已添加资源的前景色。",
-        "defaults": { "light": "#587C0C", "dark": "#81B88B", "highContrast": "#A1E3AD", "highContrastLight": "#374E06" }
+        "defaults": {
+          "light": "#587C0C",
+          "dark": "#81B88B",
+          "highContrast": "#A1E3AD",
+          "highContrastLight": "#374E06"
+        }
       },
       {
         "id": "yfSvnDecoration.untrackedResourceForeground",
         "description": "SVN 未版本控制资源的前景色。",
-        "defaults": { "light": "#895503", "dark": "#E2C08D", "highContrast": "#E2C08D", "highContrastLight": "#895503" }
+        "defaults": {
+          "light": "#895503",
+          "dark": "#E2C08D",
+          "highContrast": "#E2C08D",
+          "highContrastLight": "#895503"
+        }
       },
       {
         "id": "yfSvnDecoration.deletedResourceForeground",
         "description": "SVN 已删除或缺失资源的前景色。",
-        "defaults": { "light": "#AD0707", "dark": "#C74E39", "highContrast": "#C74E39", "highContrastLight": "#AD0707" }
+        "defaults": {
+          "light": "#AD0707",
+          "dark": "#C74E39",
+          "highContrast": "#C74E39",
+          "highContrastLight": "#AD0707"
+        }
       },
       {
         "id": "yfSvnDecoration.renamedResourceForeground",
         "description": "SVN 已替换资源的前景色。",
-        "defaults": { "light": "#007100", "dark": "#73C991", "highContrast": "#73C991", "highContrastLight": "#007100" }
+        "defaults": {
+          "light": "#007100",
+          "dark": "#73C991",
+          "highContrast": "#73C991",
+          "highContrastLight": "#007100"
+        }
       },
       {
         "id": "yfSvnDecoration.ignoredResourceForeground",
         "description": "SVN 已忽略资源的前景色。",
-        "defaults": { "light": "#8E8E90", "dark": "#8C8C8C", "highContrast": "#A7A8A9", "highContrastLight": "#8E8E90" }
+        "defaults": {
+          "light": "#8E8E90",
+          "dark": "#8C8C8C",
+          "highContrast": "#A7A8A9",
+          "highContrastLight": "#8E8E90"
+        }
       },
       {
         "id": "yfSvnDecoration.conflictingResourceForeground",
         "description": "SVN 冲突资源的前景色。",
-        "defaults": { "light": "#AD0707", "dark": "#E4676B", "highContrast": "#C74E39", "highContrastLight": "#AD0707" }
+        "defaults": {
+          "light": "#AD0707",
+          "dark": "#E4676B",
+          "highContrast": "#C74E39",
+          "highContrastLight": "#AD0707"
+        }
       },
       {
         "id": "yfSvnDecoration.externalResourceForeground",
         "description": "SVN External 资源的前景色。",
-        "defaults": { "light": "#1258A7", "dark": "#8DB9E2", "highContrast": "#8DB9E2", "highContrastLight": "#1258A7" }
+        "defaults": {
+          "light": "#1258A7",
+          "dark": "#8DB9E2",
+          "highContrast": "#8DB9E2",
+          "highContrastLight": "#1258A7"
+        }
       }
     ],
     "commands": [
-      { "command": "yfSvn.refresh", "title": "SVN: 刷新", "icon": "$(refresh)" },
-      { "command": "yfSvn.commit", "title": "SVN: 提交", "icon": "$(cloud-upload)" },
-      { "command": "yfSvn.commitAll", "title": "SVN: 全部提交", "icon": "$(cloud-upload)" },
-      { "command": "yfSvn.update", "title": "SVN: 更新", "icon": "$(cloud-download)" },
-      { "command": "yfSvn.branchTag", "title": "SVN: 创建分支/标签" },
-      { "command": "yfSvn.switch", "title": "SVN: 切换分支/标签" },
-      { "command": "yfSvn.updateFile", "title": "SVN: 更新文件" },
-      { "command": "yfSvn.updateDirectory", "title": "SVN: 更新目录" },
-      { "command": "yfSvn.checkout", "title": "SVN: 检出" },
-      { "command": "yfSvn.add", "title": "SVN: 添加", "icon": "$(add)" },
-      { "command": "yfSvn.delete", "title": "SVN: 删除" },
-      { "command": "yfSvn.revert", "title": "SVN: 还原" },
-      { "command": "yfSvn.rename", "title": "SVN: 移动/重命名" },
-      { "command": "yfSvn.ignore", "title": "SVN: 忽略" },
-      { "command": "yfSvn.lock", "title": "SVN: 锁定" },
-      { "command": "yfSvn.unlock", "title": "SVN: 解锁" },
-      { "command": "yfSvn.property", "title": "SVN: 管理属性" },
-      { "command": "yfSvn.changelist", "title": "SVN: 管理 Changelist" },
-      { "command": "yfSvn.cleanup", "title": "SVN: 清理工作副本" },
-      { "command": "yfSvn.compare", "title": "SVN: 比较版本", "icon": "$(diff)" },
-      { "command": "yfSvn.openConflict", "title": "SVN: 打开冲突处理", "icon": "$(merge)" },
-      { "command": "yfSvn.resolve", "title": "SVN: 标记冲突已解决", "icon": "$(pass)" },
-      { "command": "yfSvn.log", "title": "SVN: 查看历史" },
-      { "command": "yfSvn.blame", "title": "SVN: 查看逐行追溯" },
-      { "command": "yfSvn.diagnose", "title": "SVN: 诊断" },
-      { "command": "yfSvn.showOutput", "title": "SVN: 显示输出" }
+      {
+        "command": "yfSvn.refresh",
+        "title": "SVN: 刷新",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "yfSvn.commit",
+        "title": "SVN: 提交",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "yfSvn.commitAll",
+        "title": "SVN: 全部提交",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "yfSvn.update",
+        "title": "SVN: 更新",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "yfSvn.branchTag",
+        "title": "SVN: 创建分支/标签"
+      },
+      {
+        "command": "yfSvn.switch",
+        "title": "SVN: 切换分支/标签"
+      },
+      {
+        "command": "yfSvn.updateFile",
+        "title": "SVN: 更新文件"
+      },
+      {
+        "command": "yfSvn.updateDirectory",
+        "title": "SVN: 更新目录"
+      },
+      {
+        "command": "yfSvn.checkout",
+        "title": "SVN: 检出"
+      },
+      {
+        "command": "yfSvn.add",
+        "title": "SVN: 添加",
+        "icon": "$(add)"
+      },
+      {
+        "command": "yfSvn.delete",
+        "title": "SVN: 删除"
+      },
+      {
+        "command": "yfSvn.revert",
+        "title": "SVN: 还原"
+      },
+      {
+        "command": "yfSvn.rename",
+        "title": "SVN: 移动/重命名"
+      },
+      {
+        "command": "yfSvn.ignore",
+        "title": "SVN: 忽略"
+      },
+      {
+        "command": "yfSvn.lock",
+        "title": "SVN: 锁定"
+      },
+      {
+        "command": "yfSvn.unlock",
+        "title": "SVN: 解锁"
+      },
+      {
+        "command": "yfSvn.property",
+        "title": "SVN: 管理属性"
+      },
+      {
+        "command": "yfSvn.changelist",
+        "title": "SVN: 管理 Changelist"
+      },
+      {
+        "command": "yfSvn.cleanup",
+        "title": "SVN: 清理工作副本"
+      },
+      {
+        "command": "yfSvn.compare",
+        "title": "SVN: 比较版本",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "yfSvn.openConflict",
+        "title": "SVN: 打开冲突处理",
+        "icon": "$(merge)"
+      },
+      {
+        "command": "yfSvn.resolve",
+        "title": "SVN: 标记冲突已解决",
+        "icon": "$(pass)"
+      },
+      {
+        "command": "yfSvn.log",
+        "title": "SVN: 查看历史"
+      },
+      {
+        "command": "yfSvn.blame",
+        "title": "SVN: 查看逐行追溯"
+      },
+      {
+        "command": "yfSvn.diagnose",
+        "title": "SVN: 诊断"
+      },
+      {
+        "command": "yfSvn.showOutput",
+        "title": "SVN: 显示输出"
+      }
     ],
     "menus": {
       "scm/title": [
-        { "command": "yfSvn.refresh", "when": "scmProvider == yfSvn", "group": "navigation@1" },
-        { "command": "yfSvn.update", "when": "scmProvider == yfSvn", "group": "navigation@2" },
-        { "command": "yfSvn.commitAll", "when": "scmProvider == yfSvn", "group": "navigation@3" },
-        { "command": "yfSvn.branchTag", "when": "scmProvider == yfSvn", "group": "2_svn@1" },
-        { "command": "yfSvn.switch", "when": "scmProvider == yfSvn", "group": "2_svn@2" },
-        { "command": "yfSvn.cleanup", "when": "scmProvider == yfSvn", "group": "2_svn@3" },
-        { "command": "yfSvn.log", "when": "scmProvider == yfSvn", "group": "2_svn@4" }
+        {
+          "command": "yfSvn.refresh",
+          "when": "scmProvider == yfSvn",
+          "group": "navigation@1"
+        },
+        {
+          "command": "yfSvn.update",
+          "when": "scmProvider == yfSvn",
+          "group": "navigation@2"
+        },
+        {
+          "command": "yfSvn.commitAll",
+          "when": "scmProvider == yfSvn",
+          "group": "navigation@3"
+        },
+        {
+          "command": "yfSvn.branchTag",
+          "when": "scmProvider == yfSvn",
+          "group": "2_svn@1"
+        },
+        {
+          "command": "yfSvn.switch",
+          "when": "scmProvider == yfSvn",
+          "group": "2_svn@2"
+        },
+        {
+          "command": "yfSvn.cleanup",
+          "when": "scmProvider == yfSvn",
+          "group": "2_svn@3"
+        },
+        {
+          "command": "yfSvn.log",
+          "when": "scmProvider == yfSvn",
+          "group": "2_svn@4"
+        }
       ],
       "scm/resourceGroup/context": [
-        { "command": "yfSvn.commit", "when": "scmProvider == yfSvn && scmResourceGroup =~ /^changelist:/", "group": "inline@1" }
+        {
+          "command": "yfSvn.commit",
+          "when": "scmProvider == yfSvn && scmResourceGroup =~ /^changelist:/",
+          "group": "inline@1"
+        }
       ],
       "scm/resourceState/context": [
-        { "command": "yfSvn.commit", "when": "scmProvider == yfSvn && scmResourceGroup != unversioned && scmResourceGroup != ignored && scmResourceGroup != externals && scmResourceGroup != conflicts", "group": "1_commit@1" },
-        { "command": "yfSvn.compare", "when": "scmProvider == yfSvn && scmResourceGroup != unversioned && scmResourceGroup != conflicts", "group": "inline@1" },
-        { "command": "yfSvn.openConflict", "when": "scmProvider == yfSvn && scmResourceGroup == conflicts", "group": "inline@1" },
-        { "command": "yfSvn.add", "when": "scmProvider == yfSvn && scmResourceGroup == unversioned", "group": "inline@2" },
-        { "command": "yfSvn.resolve", "when": "scmProvider == yfSvn && scmResourceGroup == conflicts", "group": "inline@2" },
-        { "command": "yfSvn.revert", "when": "scmProvider == yfSvn && scmResourceGroup != unversioned && scmResourceGroup != ignored", "group": "2_svn@1" },
-        { "command": "yfSvn.delete", "when": "scmProvider == yfSvn && scmResourceGroup != ignored", "group": "2_svn@2" },
-        { "command": "yfSvn.rename", "when": "scmProvider == yfSvn && scmResourceGroup != ignored", "group": "2_svn@3" },
-        { "command": "yfSvn.ignore", "when": "scmProvider == yfSvn && scmResourceGroup == unversioned", "group": "2_svn@4" },
-        { "command": "yfSvn.changelist", "when": "scmProvider == yfSvn && scmResourceGroup != unversioned && scmResourceGroup != ignored && scmResourceGroup != externals", "group": "2_svn@5" },
-        { "command": "yfSvn.lock", "when": "scmProvider == yfSvn && scmResourceGroup != unversioned && scmResourceGroup != ignored && scmResourceGroup != externals", "group": "2_svn@6" },
-        { "command": "yfSvn.unlock", "when": "scmProvider == yfSvn && scmResourceGroup != unversioned && scmResourceGroup != ignored && scmResourceGroup != externals", "group": "2_svn@7" },
-        { "command": "yfSvn.property", "when": "scmProvider == yfSvn && scmResourceGroup != unversioned && scmResourceGroup != ignored && scmResourceGroup != externals", "group": "2_svn@8" },
-        { "command": "yfSvn.log", "when": "scmProvider == yfSvn && scmResourceGroup != unversioned", "group": "3_history@1" },
-        { "command": "yfSvn.blame", "when": "scmProvider == yfSvn && scmResourceGroup != unversioned", "group": "3_history@2" }
+        {
+          "command": "yfSvn.commit",
+          "when": "scmProvider == yfSvn && scmResourceGroup != unversioned && scmResourceGroup != ignored && scmResourceGroup != externals && scmResourceGroup != conflicts",
+          "group": "1_commit@1"
+        },
+        {
+          "command": "yfSvn.compare",
+          "when": "scmProvider == yfSvn && scmResourceGroup != unversioned && scmResourceGroup != conflicts",
+          "group": "inline@1"
+        },
+        {
+          "command": "yfSvn.openConflict",
+          "when": "scmProvider == yfSvn && scmResourceGroup == conflicts",
+          "group": "inline@1"
+        },
+        {
+          "command": "yfSvn.add",
+          "when": "scmProvider == yfSvn && scmResourceGroup == unversioned",
+          "group": "inline@2"
+        },
+        {
+          "command": "yfSvn.resolve",
+          "when": "scmProvider == yfSvn && scmResourceGroup == conflicts",
+          "group": "inline@2"
+        },
+        {
+          "command": "yfSvn.revert",
+          "when": "scmProvider == yfSvn && scmResourceGroup != unversioned && scmResourceGroup != ignored",
+          "group": "2_svn@1"
+        },
+        {
+          "command": "yfSvn.delete",
+          "when": "scmProvider == yfSvn && scmResourceGroup != ignored",
+          "group": "2_svn@2"
+        },
+        {
+          "command": "yfSvn.rename",
+          "when": "scmProvider == yfSvn && scmResourceGroup != ignored",
+          "group": "2_svn@3"
+        },
+        {
+          "command": "yfSvn.ignore",
+          "when": "scmProvider == yfSvn && scmResourceGroup == unversioned",
+          "group": "2_svn@4"
+        },
+        {
+          "command": "yfSvn.changelist",
+          "when": "scmProvider == yfSvn && scmResourceGroup != unversioned && scmResourceGroup != ignored && scmResourceGroup != externals",
+          "group": "2_svn@5"
+        },
+        {
+          "command": "yfSvn.lock",
+          "when": "scmProvider == yfSvn && scmResourceGroup != unversioned && scmResourceGroup != ignored && scmResourceGroup != externals",
+          "group": "2_svn@6"
+        },
+        {
+          "command": "yfSvn.unlock",
+          "when": "scmProvider == yfSvn && scmResourceGroup != unversioned && scmResourceGroup != ignored && scmResourceGroup != externals",
+          "group": "2_svn@7"
+        },
+        {
+          "command": "yfSvn.property",
+          "when": "scmProvider == yfSvn && scmResourceGroup != unversioned && scmResourceGroup != ignored && scmResourceGroup != externals",
+          "group": "2_svn@8"
+        },
+        {
+          "command": "yfSvn.log",
+          "when": "scmProvider == yfSvn && scmResourceGroup != unversioned",
+          "group": "3_history@1"
+        },
+        {
+          "command": "yfSvn.blame",
+          "when": "scmProvider == yfSvn && scmResourceGroup != unversioned",
+          "group": "3_history@2"
+        }
       ],
       "explorer/context": [
-        { "command": "yfSvn.updateFile", "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.updatableResources", "group": "svn@1" },
-        { "command": "yfSvn.updateDirectory", "when": "resourceScheme == file && explorerResourceIsFolder && resource in yfSvn.updatableResources", "group": "svn@1" },
-        { "command": "yfSvn.add", "when": "resourceScheme == file && resource in yfSvn.addableResources", "group": "svn@2" },
-        { "command": "yfSvn.commit", "when": "resourceScheme == file && resource in yfSvn.committableResources", "group": "svn@3" },
-        { "command": "yfSvn.revert", "when": "resourceScheme == file && resource in yfSvn.revertibleResources", "group": "svn@4" },
-        { "command": "yfSvn.ignore", "when": "resourceScheme == file && resource in yfSvn.ignorableResources", "group": "svn@5" },
-        { "command": "yfSvn.compare", "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.diffableResources", "group": "svn@6" },
-        { "command": "yfSvn.log", "when": "resourceScheme == file && resource in yfSvn.historicalResources", "group": "svn@7" },
-        { "command": "yfSvn.blame", "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.historicalResources", "group": "svn@8" },
-        { "command": "yfSvn.lock", "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.lockableResources", "group": "svn@9" },
-        { "command": "yfSvn.unlock", "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.unlockableResources", "group": "svn@10" },
-        { "command": "yfSvn.property", "when": "resourceScheme == file && resource in yfSvn.mutableVersionedResources", "group": "svn@11" },
-        { "command": "yfSvn.changelist", "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.mutableVersionedResources", "group": "svn@12" }
+        {
+          "command": "yfSvn.updateFile",
+          "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.updatableResources",
+          "group": "svn@1"
+        },
+        {
+          "command": "yfSvn.updateDirectory",
+          "when": "resourceScheme == file && explorerResourceIsFolder && resource in yfSvn.updatableResources",
+          "group": "svn@1"
+        },
+        {
+          "command": "yfSvn.add",
+          "when": "resourceScheme == file && resource in yfSvn.addableResources",
+          "group": "svn@2"
+        },
+        {
+          "command": "yfSvn.commit",
+          "when": "resourceScheme == file && resource in yfSvn.committableResources",
+          "group": "svn@3"
+        },
+        {
+          "command": "yfSvn.revert",
+          "when": "resourceScheme == file && resource in yfSvn.revertibleResources",
+          "group": "svn@4"
+        },
+        {
+          "command": "yfSvn.ignore",
+          "when": "resourceScheme == file && resource in yfSvn.ignorableResources",
+          "group": "svn@5"
+        },
+        {
+          "command": "yfSvn.compare",
+          "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.diffableResources",
+          "group": "svn@6"
+        },
+        {
+          "command": "yfSvn.log",
+          "when": "resourceScheme == file && resource in yfSvn.historicalResources",
+          "group": "svn@7"
+        },
+        {
+          "command": "yfSvn.blame",
+          "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.historicalResources",
+          "group": "svn@8"
+        },
+        {
+          "command": "yfSvn.lock",
+          "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.lockableResources",
+          "group": "svn@9"
+        },
+        {
+          "command": "yfSvn.unlock",
+          "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.unlockableResources",
+          "group": "svn@10"
+        },
+        {
+          "command": "yfSvn.property",
+          "when": "resourceScheme == file && resource in yfSvn.mutableVersionedResources",
+          "group": "svn@11"
+        },
+        {
+          "command": "yfSvn.changelist",
+          "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.mutableVersionedResources",
+          "group": "svn@12"
+        }
       ],
       "editor/context": [
-        { "submenu": "yfSvn.editorContext", "when": "resourceScheme == file && resource in yfSvn.knownResources", "group": "9_cutcopypaste@100" }
+        {
+          "submenu": "yfSvn.editorContext",
+          "when": "resourceScheme == file && resource in yfSvn.knownResources",
+          "group": "9_cutcopypaste@100"
+        }
       ],
       "yfSvn.editorContext": [
-        { "command": "yfSvn.updateFile", "when": "resource in yfSvn.updatableResources", "group": "1_update@1" },
-        { "command": "yfSvn.add", "when": "resource in yfSvn.addableResources", "group": "2_local@1" },
-        { "command": "yfSvn.commit", "when": "resource in yfSvn.committableResources", "group": "2_local@2" },
-        { "command": "yfSvn.revert", "when": "resource in yfSvn.revertibleResources", "group": "2_local@3" },
-        { "command": "yfSvn.ignore", "when": "resource in yfSvn.ignorableResources", "group": "2_local@4" },
-        { "command": "yfSvn.compare", "when": "resource in yfSvn.diffableResources", "group": "3_history@1" },
-        { "command": "yfSvn.log", "when": "resource in yfSvn.historicalResources", "group": "3_history@2" },
-        { "command": "yfSvn.blame", "when": "resource in yfSvn.historicalResources", "group": "3_history@3" },
-        { "command": "yfSvn.lock", "when": "resource in yfSvn.lockableResources", "group": "4_advanced@1" },
-        { "command": "yfSvn.unlock", "when": "resource in yfSvn.unlockableResources", "group": "4_advanced@2" },
-        { "command": "yfSvn.property", "when": "resource in yfSvn.mutableVersionedResources", "group": "4_advanced@3" },
-        { "command": "yfSvn.changelist", "when": "resource in yfSvn.mutableVersionedResources", "group": "4_advanced@4" }
+        {
+          "command": "yfSvn.updateFile",
+          "when": "resource in yfSvn.updatableResources",
+          "group": "1_update@1"
+        },
+        {
+          "command": "yfSvn.add",
+          "when": "resource in yfSvn.addableResources",
+          "group": "2_local@1"
+        },
+        {
+          "command": "yfSvn.commit",
+          "when": "resource in yfSvn.committableResources",
+          "group": "2_local@2"
+        },
+        {
+          "command": "yfSvn.revert",
+          "when": "resource in yfSvn.revertibleResources",
+          "group": "2_local@3"
+        },
+        {
+          "command": "yfSvn.ignore",
+          "when": "resource in yfSvn.ignorableResources",
+          "group": "2_local@4"
+        },
+        {
+          "command": "yfSvn.compare",
+          "when": "resource in yfSvn.diffableResources",
+          "group": "3_history@1"
+        },
+        {
+          "command": "yfSvn.log",
+          "when": "resource in yfSvn.historicalResources",
+          "group": "3_history@2"
+        },
+        {
+          "command": "yfSvn.blame",
+          "when": "resource in yfSvn.historicalResources",
+          "group": "3_history@3"
+        },
+        {
+          "command": "yfSvn.lock",
+          "when": "resource in yfSvn.lockableResources",
+          "group": "4_advanced@1"
+        },
+        {
+          "command": "yfSvn.unlock",
+          "when": "resource in yfSvn.unlockableResources",
+          "group": "4_advanced@2"
+        },
+        {
+          "command": "yfSvn.property",
+          "when": "resource in yfSvn.mutableVersionedResources",
+          "group": "4_advanced@3"
+        },
+        {
+          "command": "yfSvn.changelist",
+          "when": "resource in yfSvn.mutableVersionedResources",
+          "group": "4_advanced@4"
+        }
       ]
     },
     "configuration": {
@@ -189,7 +514,12 @@
         },
         "yfSvn.statusDepth": {
           "type": "string",
-          "enum": ["empty", "files", "immediates", "infinity"],
+          "enum": [
+            "empty",
+            "files",
+            "immediates",
+            "infinity"
+          ],
           "default": "infinity",
           "description": "扫描工作副本状态时使用的深度。"
         },
