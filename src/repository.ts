@@ -1,8 +1,23 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { containsConflictMarkers, extractConflictVersions } from './conflict';
+import { containsConflictMarkers, extractConflictVersions, findCommitConflicts } from './conflict';
 import { createSvnContentUri } from './contentProvider';
 import { RefreshQueue } from './refreshQueue';
+import { OperationQueue } from './operationQueue';
+import { redactText } from './redact';
+import { nextLogRange, SvnLogRange } from './logPagination';
+import { runInputSteps, SVN_DEPTH_CHOICES, validateRevision } from './inputSteps';
+import { mergePreviews } from './mergePreview';
+import { showSvnError } from './errorFeedback';
+import { formatBlameAnnotation } from './blamePresentation';
+import {
+  buildMergeArguments,
+  getMergeBlockReason,
+  isMergeConflict,
+  SvnMergePlan,
+  validateMergeRange,
+  validateMergeSource
+} from './merge';
 import { escapeSvnTarget, escapeSvnTargets } from './svnTarget';
 import {
   getSvnMenuCapabilities,
@@ -10,9 +25,10 @@ import {
   SvnMenuCapability
 } from './menuContext';
 import { SvnCli, SvnCommandError } from './svnCli';
-import { isDecoratedStatus } from './statusDecoration';
+import { getStatusColorId, getStatusIconId, getStatusTooltip, isDecoratedStatus } from './statusDecoration';
 import {
-  SvnItemStatus,
+  SvnBlameLine,
+  SvnCommandResult,
   SvnLogEntry,
   SvnRepositoryOperations,
   SvnResourceState,
@@ -39,15 +55,22 @@ export class SvnRepository implements SvnRepositoryOperations {
   private readonly changelistGroups = new Map<string, vscode.SourceControlResourceGroup>();
   private readonly statusByPath = new Map<string, SvnStatusEntry>();
   private readonly refreshQueue = new RefreshQueue();
+  private readonly operationQueue = new OperationQueue();
   private readonly blameDecoration = vscode.window.createTextEditorDecorationType({
     rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
     before: {
-      margin: '0 2em 0 0',
-      color: new vscode.ThemeColor('editorCodeLens.foreground'),
-      fontStyle: 'italic'
+      margin: '0 1em 0 0',
+      color: new vscode.ThemeColor('descriptionForeground')
     }
   });
   private blameResource: string | undefined;
+  private blameRequest = 0;
+  private blameLines: readonly SvnBlameLine[] = [];
+  private readonly uiSubscriptions: vscode.Disposable[];
+  private lastRefresh: Date | undefined;
+  private scannedDepth = 'infinity';
+  private refreshFailed = false;
+  private disposed = false;
 
   /**
    * 创建一个 SVN 工作副本实例。
@@ -55,6 +78,7 @@ export class SvnRepository implements SvnRepositoryOperations {
    * @param cli SVN CLI 适配器。
    * @param root 工作副本根目录。
    * @param output 插件输出通道。
+   * @param onDidRefresh 状态刷新完成后的通知回调。
    */
   public constructor(
     private readonly cli: SvnCli,
@@ -79,6 +103,23 @@ export class SvnRepository implements SvnRepositoryOperations {
     this.externals = this.sourceControl.createResourceGroup('externals', 'Externals');
     this.ignored.hideWhenEmpty = true;
     this.externals.hideWhenEmpty = true;
+    this.unversioned.hideWhenEmpty = true;
+    this.conflicts.hideWhenEmpty = true;
+    this.uiSubscriptions = [
+      vscode.window.onDidChangeVisibleTextEditors(() => this.renderBlame()),
+      vscode.workspace.onDidChangeTextDocument((event) => {
+        // 关键逻辑：文件内容变化后撤下旧追溯，避免把原 revision 错配到新内容。
+        if (event.contentChanges.length > 0 && event.document.uri.toString() === this.blameResource) {
+          this.blameResource = undefined;
+          this.blameLines = [];
+          this.renderBlame();
+        }
+      }),
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration('yfSvn.blameStyle', this.root)) { this.renderBlame(); }
+      })
+    ];
+    this.updateStatusBar();
   }
 
   /**
@@ -86,8 +127,37 @@ export class SvnRepository implements SvnRepositoryOperations {
    */
   public async refresh(): Promise<void> {
     return this.refreshQueue.run(async () => {
-      await this.refreshCore();
-      this.onDidRefresh();
+      try {
+        await this.refreshCore();
+        this.refreshFailed = false;
+        this.lastRefresh = new Date();
+        this.updateStatusBar();
+        this.onDidRefresh();
+      } catch (error) {
+        const message = redactText(error instanceof Error ? error.message : String(error));
+        this.output.appendLine(`[刷新失败] ${this.root.fsPath}: ${message}`);
+        this.updateStatusBar(message);
+        // 关键逻辑：一次连续失败只提示一次，保留上次状态，恢复成功后允许再次提示。
+        if (!this.refreshFailed) {
+          this.refreshFailed = true;
+          void vscode.window.showWarningMessage(
+            `SVN 状态刷新失败，当前显示的状态可能已过期：${this.root.fsPath}\n${message}`,
+            '重试刷新',
+            '显示 SVN 输出'
+          ).then((action) => {
+            if (this.disposed) {
+              return;
+            }
+            if (action === '重试刷新') {
+              this.refreshFailed = false;
+              void this.refresh().catch(() => {});
+            } else if (action === '显示 SVN 输出') {
+              this.output.show();
+            }
+          });
+        }
+        throw error;
+      }
     });
   }
 
@@ -168,7 +238,8 @@ export class SvnRepository implements SvnRepositoryOperations {
           const status = this.statusByPath.get(path.normalize(resource.fsPath).toLowerCase());
           return {
             label: relative,
-            description: status ? this.statusTooltip(status) : '状态未知',
+            description: status ? getStatusTooltip(status) : '状态未知',
+            picked: Boolean(resources?.length),
             resource
           };
         }),
@@ -189,6 +260,17 @@ export class SvnRepository implements SvnRepositoryOperations {
       }
     }
 
+    const conflicts = findCommitConflicts([...this.statusByPath.values()], targets.map((target) => target.fsPath));
+    if (conflicts.length > 0) {
+      const action = await vscode.window.showWarningMessage(
+        `所选提交范围包含未解决冲突：\n${conflicts.slice(0, 10).map((entry) => path.relative(this.root.fsPath, entry.absolutePath)).join('\n')}`,
+        '查看冲突'
+      );
+      if (action === '查看冲突') {
+        await this.openConflict(vscode.Uri.file(conflicts[0]!.absolutePath));
+      }
+      return;
+    }
     let message = this.sourceControl.inputBox.value.trim();
     if (!message) {
       message =
@@ -204,6 +286,7 @@ export class SvnRepository implements SvnRepositoryOperations {
     if (!message) {
       return;
     }
+    this.sourceControl.inputBox.value = message;
 
     const confirmation = await vscode.window.showInformationMessage(
       `确认向 ${this.root.fsPath} 提交 ${targets.length} 个目标？`,
@@ -215,7 +298,7 @@ export class SvnRepository implements SvnRepositoryOperations {
           ...targets.map((resource) => {
             const relative = path.relative(this.root.fsPath, resource.fsPath) || '.';
             const status = this.statusByPath.get(path.normalize(resource.fsPath).toLowerCase());
-            return `${status ? this.statusTooltip(status) : '状态未知'}  ${relative}`;
+            return `${status ? getStatusTooltip(status) : '状态未知'}  ${relative}`;
           })
         ].join('\n')
       },
@@ -225,6 +308,10 @@ export class SvnRepository implements SvnRepositoryOperations {
       return;
     }
     await this.runOperation('正在提交 SVN 更改', async (token) => {
+      // 关键逻辑：排队期间可能新增冲突，真正执行提交前完整检查所选范围。
+      if (findCommitConflicts(await this.readMergeStatus(token), targets.map((target) => target.fsPath)).length > 0) {
+        throw new Error('svn: E155015: 所选提交范围存在未解决冲突，请先处理后提交。');
+      }
       await this.cli.run(
         [
           'commit',
@@ -237,7 +324,9 @@ export class SvnRepository implements SvnRepositoryOperations {
         ],
         { cwd: this.root.fsPath, token }
       );
-      this.sourceControl.inputBox.value = '';
+      if (this.sourceControl.inputBox.value.trim() === message) {
+        this.sourceControl.inputBox.value = '';
+      }
     });
   }
 
@@ -245,37 +334,28 @@ export class SvnRepository implements SvnRepositoryOperations {
    * 将当前工作副本或指定资源更新到 HEAD 或指定 revision。
    *
    * @param resource 可选的文件或目录目标；省略时更新整个工作副本。
+   * @param advanced 是否使用多步输入选择 revision 和深度。
    */
-  public async update(resource?: vscode.Uri): Promise<void> {
+  public async update(resource?: vscode.Uri, advanced = false): Promise<void> {
     const target = resource ?? this.root;
-    const revisionMode = await vscode.window.showQuickPick(
-      [
-        { label: 'HEAD', description: '更新到仓库最新版本', revision: 'HEAD' },
-        { label: '指定 revision…', description: '输入数字 revision', revision: '' }
-      ],
-      { title: 'SVN Update：选择目标 revision', ignoreFocusOut: true }
-    );
-    if (!revisionMode) {
-      return;
+    let revision = 'HEAD';
+    let depth = 'working';
+    if (advanced) {
+      const values = await runInputSteps('SVN 高级更新', [
+        { key: 'revision', prompt: '选择目标 revision', placeholder: 'HEAD 或数字 revision', value: revision, validate: validateRevision },
+        { key: 'depth', prompt: '选择更新深度', placeholder: '选择更新范围，默认保持当前深度', value: depth, items: SVN_DEPTH_CHOICES }
+      ]);
+      if (!values) {
+        return;
+      }
+      revision = values.revision!.trim();
+      depth = values.depth!;
     }
-    const revision =
-      revisionMode.revision ||
-      (await vscode.window.showInputBox({
-        title: 'SVN Update',
-        prompt: '输入目标 revision',
-        validateInput: (value) => (/^\d+$/.test(value) ? undefined : '请输入数字 revision。')
-      }));
-    if (!revision) {
-      return;
+    const args = ['update', '--revision', revision];
+    // 关键逻辑：working 仅为界面内部选项；SVN CLI 必须省略 --depth 才会沿用各目录已有的深度。
+    if (depth !== 'working') {
+      args.push('--depth', depth);
     }
-    const depth = await vscode.window.showQuickPick(
-      ['working', 'empty', 'files', 'immediates', 'infinity'],
-      { title: 'SVN Update：选择更新深度' }
-    );
-    if (!depth) {
-      return;
-    }
-    const args = ['update', '--revision', revision, '--depth', depth];
     if (vscode.workspace.getConfiguration('yfSvn').get<boolean>('ignoreExternals', false)) {
       args.push('--ignore-externals');
     }
@@ -288,7 +368,7 @@ export class SvnRepository implements SvnRepositoryOperations {
         detail: [
           `工作副本：${this.root.fsPath}`,
           `更新目标：${target.fsPath}`,
-          `深度：${depth}`,
+          `深度：${SVN_DEPTH_CHOICES.find((item) => item.value === depth)?.label ?? depth}${depth === 'working' ? '' : `（${depth}）`}`,
           `忽略 Externals：${args.includes('--ignore-externals') ? '是' : '否'}`
         ].join('\n')
       },
@@ -310,17 +390,6 @@ export class SvnRepository implements SvnRepositoryOperations {
    * 从当前工作副本 URL 创建远程分支或标签。
    */
   public async branchOrTag(): Promise<void> {
-    const kind = await vscode.window.showQuickPick(
-      [
-        { label: '分支', folder: 'branches', message: '创建分支' },
-        { label: '标签', folder: 'tags', message: '创建标签' }
-      ],
-      { title: 'SVN Branch/Tag：选择类型' }
-    );
-    if (!kind) {
-      return;
-    }
-
     const infoResult = await this.cli.run(
       ['info', '--xml', '--', escapeSvnTarget(this.root.fsPath)],
       {
@@ -328,48 +397,29 @@ export class SvnRepository implements SvnRepositoryOperations {
       logStdout: false
     });
     const info = parseInfoXml(infoResult.stdout);
-    const suggestedParent = /\/trunk(?:\/.*)?$/.test(info.url)
-      ? info.url.replace(/\/trunk(?:\/.*)?$/, `/${kind.folder}/`)
-      : `${info.repositoryRoot.replace(/\/$/, '')}/${kind.folder}/`;
-    const destinationUrl = await vscode.window.showInputBox({
-      title: `SVN ${kind.label}`,
-      prompt: `输入${kind.label}的完整仓库 URL`,
-      value: suggestedParent,
-      ignoreFocusOut: true,
-      validateInput: (value) => {
-        const target = value.trim();
-        if (!target) {
-          return '目标 URL 不能为空。';
-        }
-        if (target.endsWith('/')) {
-          return `请输入包含${kind.label}名称的完整 URL。`;
-        }
-        return target === info.url ? '目标 URL 不能与当前 URL 相同。' : undefined;
-      }
-    });
-    if (!destinationUrl) {
+    const values = await runInputSteps('SVN 创建分支或标签', [
+      { key: 'kind', prompt: '选择创建类型', placeholder: '选择分支或标签', value: 'branches', items: [
+        { label: '分支', value: 'branches' }, { label: '标签', value: 'tags' }
+      ] },
+      {
+        key: 'destination', prompt: '输入包含分支或标签名称的完整目标 URL', placeholder: 'https://example.com/svn/project/branches/feature',
+        value: (draft) => /\/trunk(?:\/.*)?$/.test(info.url)
+          ? info.url.replace(/\/trunk(?:\/.*)?$/, `/${draft.kind}/`)
+          : `${info.repositoryRoot.replace(/\/$/, '')}/${draft.kind}/`,
+        validate: (value) => validateMergeSource(value) ?? (value.trim().endsWith('/') ? '请输入包含名称的完整目标 URL。' : value.trim() === info.url ? '目标 URL 不能与当前 URL 相同。' : undefined)
+      },
+      { key: 'revision', prompt: '输入来源 revision', placeholder: 'HEAD 或数字 revision', value: 'HEAD', validate: validateRevision },
+      { key: 'message', prompt: '输入提交说明', placeholder: '说明本次创建用途',
+        value: (draft) => `创建${draft.kind === 'tags' ? '标签' : '分支'}：${draft.destination?.trim().split('/').at(-1) ?? ''}`,
+        validate: (value) => value.trim() ? undefined : '提交说明不能为空。' }
+    ]);
+    if (!values) {
       return;
     }
-    const revision = await vscode.window.showInputBox({
-      title: `SVN ${kind.label}`,
-      prompt: '输入源 revision，默认 HEAD',
-      value: 'HEAD',
-      validateInput: (value) =>
-        value === 'HEAD' || /^\d+$/.test(value) ? undefined : '请输入 HEAD 或数字 revision。'
-    });
-    if (!revision) {
-      return;
-    }
-    const message = await vscode.window.showInputBox({
-      title: `SVN ${kind.label}`,
-      prompt: '输入提交说明',
-      value: `${kind.message}：${destinationUrl.trim().split('/').at(-1) ?? ''}`,
-      ignoreFocusOut: true,
-      validateInput: (value) => (value.trim() ? undefined : '提交说明不能为空。')
-    });
-    if (!message) {
-      return;
-    }
+    const kind = { label: values.kind === 'tags' ? '标签' : '分支' };
+    const destinationUrl = values.destination!.trim();
+    const revision = values.revision!.trim();
+    const message = values.message!.trim();
     const confirmation = await vscode.window.showInformationMessage(
       `确认创建 SVN ${kind.label}？`,
       {
@@ -419,33 +469,18 @@ export class SvnRepository implements SvnRepositoryOperations {
       logStdout: false
     });
     const info = parseInfoXml(infoResult.stdout);
-    const destinationUrl = await vscode.window.showInputBox({
-      title: 'SVN Switch',
-      prompt: '输入同一仓库中的目标 URL',
-      value: info.url,
-      ignoreFocusOut: true,
-      validateInput: (value) => (value.trim() ? undefined : '目标 URL 不能为空。')
-    });
-    if (!destinationUrl || destinationUrl.trim() === info.url) {
+    const values = await runInputSteps('SVN 切换分支或标签', [
+      { key: 'destination', prompt: '输入同一仓库中的目标 URL', placeholder: '完整的分支或标签 URL', value: info.url,
+        validate: (value) => validateMergeSource(value) ?? (value.trim() === info.url ? '请选择其他目标 URL。' : undefined) },
+      { key: 'revision', prompt: '输入目标 revision', placeholder: 'HEAD 或数字 revision', value: 'HEAD', validate: validateRevision },
+      { key: 'depth', prompt: '选择切换深度', placeholder: '选择需要切换的目录范围', value: 'infinity', items: SVN_DEPTH_CHOICES.filter((item) => item.value !== 'working') }
+    ]);
+    if (!values) {
       return;
     }
-    const revision = await vscode.window.showInputBox({
-      title: 'SVN Switch',
-      prompt: '输入目标 revision，默认 HEAD',
-      value: 'HEAD',
-      validateInput: (value) =>
-        value === 'HEAD' || /^\d+$/.test(value) ? undefined : '请输入 HEAD 或数字 revision。'
-    });
-    if (!revision) {
-      return;
-    }
-    const depth = await vscode.window.showQuickPick(
-      ['empty', 'files', 'immediates', 'infinity'],
-      { title: 'SVN Switch：选择深度' }
-    );
-    if (!depth) {
-      return;
-    }
+    const destinationUrl = values.destination!.trim();
+    const revision = values.revision!.trim();
+    const depth = values.depth!;
     const args = ['switch', '--revision', revision, '--depth', depth];
     if (vscode.workspace.getConfiguration('yfSvn').get<boolean>('ignoreExternals', false)) {
       args.push('--ignore-externals');
@@ -474,6 +509,252 @@ export class SvnRepository implements SvnRepositoryOperations {
     if (succeeded) {
       void vscode.window.showInformationMessage(`SVN Switch 成功：${destinationUrl.trim()}`);
     }
+  }
+
+  /** 先预演，再由用户确认将来源分支的变更合并到当前工作副本。 */
+  public async merge(): Promise<void> {
+    const source = await this.selectMergeSource();
+    if (!source) {
+      return;
+    }
+    const range = await vscode.window.showInputBox({
+      title: 'SVN 合并：选择 revision 范围',
+      prompt: `留空合并全部可合并变更；N:M 表示合并 r(N+1) 至 rM，来源快照为 r${source.sourceRevision}`,
+      placeHolder: '例如 10:15；留空表示全部可合并变更',
+      ignoreFocusOut: true,
+      validateInput: (value) => validateMergeRange(value, source.sourceRevision)
+    });
+    if (range === undefined) {
+      return;
+    }
+    const plan: SvnMergePlan = { ...source, revisionRange: range.trim() || undefined };
+    const preview = await this.performMerge(plan, true);
+    if (!preview) {
+      return;
+    }
+    const uri = mergePreviews.create(this.root, plan, [
+      'SVN 合并预演（未修改工作文件）',
+      this.mergePlanDetail(plan),
+      '',
+      '以下为 SVN 预演输出；实际合并前会再次检查工作副本。',
+      preview.stdout || 'SVN 未报告待合并的文件变更。',
+      preview.stderr
+    ].join('\n'));
+    const document = await vscode.workspace.openTextDocument(uri);
+    await vscode.window.showTextDocument(document, { preview: false });
+    const next = await vscode.window.showInformationMessage(
+      'SVN 合并预演已完成，请检查预演结果。',
+      '执行合并'
+    );
+    if (next === '执行合并') {
+      await this.continueMerge(uri);
+    }
+  }
+
+  /**
+   * 从只读预演继续合并；确认前占用预演，避免重复点击同时执行。
+   * @param uri 已完成预演的文档 URI。
+   */
+  public async continueMerge(uri: vscode.Uri): Promise<void> {
+    const preview = mergePreviews.get(uri);
+    if (this.disposed || !preview || preview.root.toString() !== this.root.toString() || preview.state !== 'ready') {
+      void vscode.window.showWarningMessage('此合并预演不可继续，请查看执行状态或重新运行“SVN: 合并”。');
+      return;
+    }
+    mergePreviews.setState(uri, 'running');
+    const plan = preview.plan;
+    try {
+      const confirmation = await vscode.window.showWarningMessage(
+        '确认将以下来源的变更合并到当前 SVN 工作副本？',
+        {
+          modal: true,
+          detail: `${this.mergePlanDetail(plan)}\n\n合并结果保留为本地修改，请检查后自行提交。`
+        },
+        '合并'
+      );
+      if (confirmation !== '合并') {
+        mergePreviews.setState(uri, 'ready');
+        return;
+      }
+      const result = await this.performMerge(plan, false);
+      // 关键逻辑：失败或取消也可能已修改部分文件，此预演必须失效，不能重复使用。
+      mergePreviews.setState(uri, result ? 'applied' : 'invalid');
+      if (result?.conflicts) {
+        const depth = vscode.workspace.getConfiguration('yfSvn').get<string>('statusDepth', 'infinity');
+        void vscode.window.showWarningMessage(depth === 'infinity'
+          ? 'SVN 合并产生冲突，请在源代码管理的“冲突”分组中处理，解决后再提交。'
+          : 'SVN 合并产生冲突，请将 yfSvn.statusDepth 设置为 infinity 并刷新，以查看完整冲突列表，解决后再提交。');
+      } else if (result) {
+        void vscode.window.showInformationMessage('SVN 合并完成，结果尚未提交。请检查差异后提交。');
+      }
+    } finally {
+      if (mergePreviews.get(uri)?.state === 'running') {
+        mergePreviews.setState(uri, 'invalid');
+      }
+    }
+  }
+
+  /** 查看所选来源相对当前工作副本已合并及尚未合并的 revision。 */
+  public async showMergeinfo(): Promise<void> {
+    const plan = await this.selectMergeSource();
+    if (!plan) {
+      return;
+    }
+    const content = await this.runOperation('正在读取 SVN Mergeinfo', (token) => this.operationQueue.run(async () => {
+      await this.verifyMergeTarget(plan, token);
+      const sections = ['SVN Mergeinfo', this.mergePlanDetail(plan)];
+      for (const [mode, title] of [['merged', '已合并 revision'], ['eligible', '尚未合并 revision']] as const) {
+        const result = await this.cli.run(
+          ['mergeinfo', '--show-revs', mode, '--depth', 'infinity', '--',
+            `${plan.sourceUrl}@${plan.sourceRevision}`, escapeSvnTarget(this.root.fsPath)],
+          { cwd: this.root.fsPath, token, logStdout: false }
+        );
+        sections.push('', title, result.stdout.trim() || '（无）');
+      }
+      sections.push('', '带 * 的 revision 表示仅在部分子路径上合并。');
+      return redactText(sections.join('\n'));
+    }), false);
+    if (content !== undefined) {
+      const document = await vscode.workspace.openTextDocument({ language: 'plaintext', content });
+      await vscode.window.showTextDocument(document, { preview: false });
+    }
+  }
+
+  /**
+   * 选择同一仓库中的来源分支，并固定来源 HEAD，供预演和实际合并共用。
+   *
+   * @returns 合并来源及目标快照；取消或读取失败时返回 undefined。
+   */
+  private async selectMergeSource(): Promise<SvnMergePlan | undefined> {
+    const target = await this.runOperation('正在读取 SVN 合并目标', async (token) => {
+      const result = await this.cli.run(
+        ['info', '--xml', '--', escapeSvnTarget(this.root.fsPath)],
+        { cwd: this.root.fsPath, token, logStdout: false }
+      );
+      return parseInfoXml(result.stdout);
+    }, false);
+    if (!target) {
+      return undefined;
+    }
+    const sourceUrl = await vscode.window.showInputBox({
+      title: 'SVN 合并：选择来源 URL',
+      prompt: '输入同一仓库中的完整来源分支 URL（不附加 @REV）',
+      value: target.url,
+      ignoreFocusOut: true,
+      validateInput: validateMergeSource
+    });
+    if (!sourceUrl) {
+      return undefined;
+    }
+    return this.runOperation('正在读取 SVN 合并来源', async (token) => {
+      const result = await this.cli.run(
+        ['info', '--xml', '--revision', 'HEAD', '--', `${sourceUrl.trim()}@HEAD`],
+        { cwd: this.root.fsPath, token, logStdout: false }
+      );
+      const source = parseInfoXml(result.stdout);
+      if (!source.repositoryUuid || source.repositoryUuid !== target.repositoryUuid) {
+        throw new Error('合并来源与目标必须属于同一个 SVN 仓库。');
+      }
+      if (source.url === target.url) {
+        throw new Error('来源分支与目标分支相同，请选择其他来源 URL。');
+      }
+      return {
+        sourceUrl: source.url,
+        sourceRevision: source.revision,
+        targetUrl: target.url,
+        targetRevision: target.revision,
+        repositoryUuid: target.repositoryUuid
+      };
+    }, false);
+  }
+
+  /**
+   * 格式化来源、目标和范围，保证预演与确认界面展示相同的合并方向。
+   *
+   * @param plan 本次合并的来源及目标快照。
+   * @returns 已脱敏的合并说明。
+   */
+  private mergePlanDetail(plan: SvnMergePlan): string {
+    return redactText([
+      `来源：${plan.sourceUrl}@${plan.sourceRevision}`,
+      `目标 URL：${plan.targetUrl}`,
+      `目标工作副本：${this.root.fsPath}（r${plan.targetRevision}）`,
+      `范围：${plan.revisionRange ?? '全部可合并变更'}`
+    ].join('\n'));
+  }
+
+  /**
+   * 读取完整目标状态，避免较浅的界面扫描深度遗漏修改和冲突。
+   *
+   * @param token 当前合并操作的取消令牌。
+   * @returns 排除外部工作副本的递归 SVN 状态。
+   */
+  private async readMergeStatus(token: vscode.CancellationToken): Promise<readonly SvnStatusEntry[]> {
+    const result = await this.cli.run(
+      ['status', '--xml', '--ignore-externals', '--depth', 'infinity', '--', escapeSvnTarget(this.root.fsPath)],
+      { cwd: this.root.fsPath, token, logStdout: false }
+    );
+    return parseStatusXml(result.stdout, this.root.fsPath);
+  }
+
+  /**
+   * 校验排队后的目标仍与用户选择时一致，防止切换或更新后使用旧的合并说明。
+   *
+   * @param plan 用户选择时固定的目标信息。
+   * @param token 当前查询或合并的取消令牌。
+   */
+  private async verifyMergeTarget(plan: SvnMergePlan, token: vscode.CancellationToken): Promise<void> {
+    const target = parseInfoXml((await this.cli.run(
+      ['info', '--xml', '--', escapeSvnTarget(this.root.fsPath)],
+      { cwd: this.root.fsPath, token, logStdout: false }
+    )).stdout);
+    if (target.url !== plan.targetUrl || target.repositoryUuid !== plan.repositoryUuid || target.revision !== plan.targetRevision) {
+      throw new Error('目标工作副本的 URL 或 revision 已变化，请重新选择来源并预演合并。');
+    }
+  }
+
+  /**
+   * 在工作副本操作队列中重新校验目标后执行预演或实际合并。
+   *
+   * @param plan 已固定的合并来源、目标及 revision 范围。
+   * @param dryRun 是否仅执行预演。
+   * @returns SVN 输出和冲突状态（读取失败时未知）；合并命令失败或取消时返回 undefined。
+   */
+  private async performMerge(
+    plan: SvnMergePlan,
+    dryRun: boolean
+  ): Promise<(SvnCommandResult & { readonly conflicts: boolean | undefined }) | undefined> {
+    return this.runOperation(dryRun ? '正在预演 SVN 合并' : '正在合并 SVN 变更', async (token) => {
+      // 关键逻辑：检查必须在队列出队后执行，避免先前排队的写操作使确认信息失效。
+      await this.verifyMergeTarget(plan, token);
+      const dirty = vscode.workspace.textDocuments.some((document) => {
+        const relative = path.relative(this.root.fsPath, document.uri.fsPath);
+        return document.uri.scheme === 'file' && document.isDirty &&
+          !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`);
+      });
+      if (dirty) {
+        throw new Error('工作副本存在尚未保存的编辑器内容，请先处理后重新合并。');
+      }
+      const reason = getMergeBlockReason(await this.readMergeStatus(token));
+      if (reason) {
+        throw new Error(reason);
+      }
+      // 关键逻辑：预演也占用同一队列；保留冲突供现有合并编辑器处理，不自动接受某一侧。
+      const result = await this.cli.run(buildMergeArguments(plan, dryRun), { cwd: this.root.fsPath, token });
+      let conflicts: boolean | undefined = false;
+      if (!dryRun) {
+        try {
+          conflicts = (await this.readMergeStatus(token)).some(isMergeConflict);
+        } catch (error) {
+          // 关键逻辑：合并已完成，后续状态读取失败不能把实际合并结果误报为失败。
+          conflicts = undefined;
+          const message = redactText(error instanceof Error ? error.message : String(error));
+          this.output.appendLine(`[合并状态检查失败] ${message}`);
+          void vscode.window.showWarningMessage('SVN 合并命令已完成，但冲突状态读取失败，请手动刷新并检查冲突后提交。');
+        }
+      }
+      return { ...result, conflicts };
+    });
   }
 
   /**
@@ -512,9 +793,10 @@ export class SvnRepository implements SvnRepositoryOperations {
     if (confirmation !== '删除') {
       return;
     }
-    const unversioned = resources.filter((resource) => this.isUnversioned(resource));
-    const versioned = resources.filter((resource) => !this.isUnversioned(resource));
     await this.runOperation('正在删除 SVN 资源', async (token) => {
+      // 关键逻辑：排队结束后再读取状态，避免使用前一项操作执行前的资源分类。
+      const unversioned = resources.filter((resource) => this.isUnversioned(resource));
+      const versioned = resources.filter((resource) => !this.isUnversioned(resource));
       if (versioned.length > 0) {
         await this.cli.run(
           ['delete', '--force', '--', ...escapeSvnTargets(versioned.map((resource) => resource.fsPath))],
@@ -526,6 +808,9 @@ export class SvnRepository implements SvnRepositoryOperations {
       }
       // 关键逻辑：未版本控制文件不属于 SVN，使用系统回收站保证仍可恢复。
       for (const resource of unversioned) {
+        if (token.isCancellationRequested) {
+          throw new vscode.CancellationError();
+        }
         await vscode.workspace.fs.delete(resource, {
           recursive: true,
           useTrash: true
@@ -676,12 +961,13 @@ export class SvnRepository implements SvnRepositoryOperations {
    * 锁定选中的 SVN 文件。
    *
    * @param resources 要锁定的文件。
+   * @param force 是否直接使用强制锁定；省略时保留方式选择。
    */
-  public async lock(resources: readonly vscode.Uri[]): Promise<void> {
+  public async lock(resources: readonly vscode.Uri[], force = false): Promise<void> {
     if (resources.length === 0) {
       return;
     }
-    const mode = await vscode.window.showQuickPick(
+    const mode = force ? { force: true } : await vscode.window.showQuickPick(
       [
         { label: '普通锁定', description: '已有锁时停止操作', force: false },
         { label: '强制锁定', description: '夺取其他工作副本持有的锁', force: true }
@@ -724,12 +1010,13 @@ export class SvnRepository implements SvnRepositoryOperations {
    * 解锁选中的 SVN 文件。
    *
    * @param resources 要解锁的文件。
+   * @param force 是否直接使用强制解锁；省略时保留方式选择。
    */
-  public async unlock(resources: readonly vscode.Uri[]): Promise<void> {
+  public async unlock(resources: readonly vscode.Uri[], force = false): Promise<void> {
     if (resources.length === 0) {
       return;
     }
-    const mode = await vscode.window.showQuickPick(
+    const mode = force ? { force: true } : await vscode.window.showQuickPick(
       [
         { label: '普通解锁', description: '仅释放当前工作副本持有的锁', force: false },
         { label: '强制解锁', description: '释放其他用户或工作副本持有的锁', force: true }
@@ -1018,7 +1305,7 @@ export class SvnRepository implements SvnRepositoryOperations {
             output: resource
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = redactText(error instanceof Error ? error.message : String(error));
           this.output.appendLine(`[警告] 无法打开三方合并编辑器：${message}`);
           await vscode.commands.executeCommand(
             'vscode.diff',
@@ -1067,13 +1354,13 @@ export class SvnRepository implements SvnRepositoryOperations {
           '',
           `- 路径：${resource.fsPath}`,
           `- 操作：${conflict?.operation || '未知'}`,
-          `- 状态：${this.statusTooltip(status)}`,
+          `- 状态：${getStatusTooltip(status)}`,
           '',
           '树冲突通常涉及文件或目录被移动、删除或替换。确认工作副本结构正确后，再从 Source Control 视图选择“标记冲突已解决”。'
         ].join('\n')
       });
       await vscode.window.showTextDocument(document, { preview: true });
-    });
+    }, false);
   }
 
   /**
@@ -1137,7 +1424,7 @@ export class SvnRepository implements SvnRepositoryOperations {
         detail: resources
           .map((resource) => {
             const status = this.statusByPath.get(path.normalize(resource.fsPath).toLowerCase());
-            return `${status ? this.statusTooltip(status) : '冲突类型未知'}  ${path.relative(this.root.fsPath, resource.fsPath)}`;
+            return `${status ? getStatusTooltip(status) : '冲突类型未知'}  ${path.relative(this.root.fsPath, resource.fsPath)}`;
           })
           .join('\n')
       },
@@ -1174,7 +1461,7 @@ export class SvnRepository implements SvnRepositoryOperations {
         cwd: this.root.fsPath,
         token
       });
-      const targetUrl = `${parseInfoXml(infoResult.stdout).url}@HEAD`;
+      const targetInfo = parseInfoXml(infoResult.stdout);
       const filterMode = await vscode.window.showQuickPick(
         [
           { label: '最近历史', description: `每页 ${limit} 条，可继续加载` },
@@ -1204,80 +1491,150 @@ export class SvnRepository implements SvnRepositoryOperations {
         if (!revisionRange) {
           return;
         }
-        author =
-          (
-            await vscode.window.showInputBox({
-              title: 'SVN 历史筛选',
-              prompt: '输入作者关键字；留空表示全部作者'
-            })
-          )?.trim() ?? '';
+        const input = await vscode.window.showInputBox({
+          title: 'SVN 历史筛选',
+          prompt: '输入作者关键字；留空表示全部作者'
+        });
+        if (input === undefined) {
+          return;
+        }
+        author = input.trim();
       }
 
-      // 关键逻辑：普通历史按最旧 revision 向后翻页；自定义范围保持用户给定边界。
-      while (true) {
-        const args = [
-          'log',
-          '--xml',
-          '--verbose',
-          '--revision',
-          revisionRange,
-          '--limit',
-          String(limit)
-        ];
-        if (author) {
-          args.push('--search', author);
-        }
-        args.push('--', targetUrl);
-        const result = await this.cli.run(args, {
-          cwd: this.root.fsPath,
-          token
-        });
-        const entries = parseLogXml(result.stdout).filter(
-          (entry) => !author || entry.author.toLowerCase().includes(author.toLowerCase())
-        );
-        const oldestRevision = Math.min(
-          ...entries.map((entry) => Number(entry.revision)).filter(Number.isFinite)
-        );
-        const canLoadMore =
-          !filtered && entries.length >= limit && Number.isFinite(oldestRevision) && oldestRevision > 1;
-        const action = await this.pickLogEntry(target, entries, canLoadMore);
-        if (action !== 'more') {
+      const resolved = await this.resolveLogRange(revisionRange, targetInfo.repositoryRoot, token);
+      const targetUrl = `${targetInfo.url}@${resolved.headRevision}`;
+      let range: SvnLogRange | undefined = resolved.range;
+      while (range) {
+        const page = await this.readLogPage(targetUrl, range, author, limit, token);
+        const action = await this.pickLogEntry(target, page.entries, page.nextRange !== undefined);
+        if (action !== 'more' || !page.nextRange) {
           break;
         }
-        revisionRange = `${oldestRevision - 1}:1`;
+        range = page.nextRange;
       }
-    });
+    }, false);
   }
 
   /**
-   * 在编辑器行尾显示或关闭文件的 SVN Blame 逐行追溯结果。
+   * 将 HEAD 和日期边界解析为数字，保证翻页期间的方向、终点与来源路径不漂移。
+   *
+   * @param value 用户输入的 revision 或日期范围。
+   * @param repositoryRoot 仓库根 URL，用于解析早于目标路径创建时间的日期。
+   * @param token 历史查询的取消令牌。
+   * @returns 数字查询范围及固定的仓库 HEAD。
+   */
+  private async resolveLogRange(
+    value: string,
+    repositoryRoot: string,
+    token: vscode.CancellationToken
+  ): Promise<{ readonly range: SvnLogRange; readonly headRevision: string }> {
+    const match = /^(HEAD|\d+|\{[^}]+\}):(\d+|\{[^}]+\})$/.exec(value);
+    if (!match) {
+      throw new Error('请输入有效的 SVN 历史 revision 或日期范围。');
+    }
+    const head = parseInfoXml((await this.cli.run(
+      ['info', '--xml', '--revision', 'HEAD', '--', `${repositoryRoot}@HEAD`],
+      { cwd: this.root.fsPath, token, logStdout: false }
+    )).stdout).revision;
+    const bounds: bigint[] = [];
+    for (const boundary of [match[1]!, match[2]!]) {
+      if (boundary === 'HEAD') {
+        bounds.push(BigInt(head));
+      } else if (/^\d+$/.test(boundary)) {
+        bounds.push(BigInt(boundary));
+      } else {
+        const result = await this.cli.run(
+          ['info', '--xml', '--revision', boundary, '--', `${repositoryRoot}@${head}`],
+          { cwd: this.root.fsPath, token, logStdout: false }
+        );
+        bounds.push(BigInt(parseInfoXml(result.stdout).revision));
+      }
+    }
+    return { range: { start: bounds[0]!, end: bounds[1]! }, headRevision: head };
+  }
+
+  /**
+   * 读取一页作者匹配的历史，空匹配页自动向后搜索但始终保留原始范围边界。
+   *
+   * @param targetUrl 已固定 peg revision 的历史目标 URL。
+   * @param range 当前数字 revision 范围。
+   * @param author 作者关键字，按不区分大小写的字面包含规则筛选。
+   * @param limit 每次 SVN 查询的最大记录数。
+   * @param token 历史查询的取消令牌。
+   * @returns 当前匹配页及下一页范围。
+   */
+  private async readLogPage(
+    targetUrl: string,
+    range: SvnLogRange,
+    author: string,
+    limit: number,
+    token: vscode.CancellationToken
+  ): Promise<{ readonly entries: readonly SvnLogEntry[]; readonly nextRange?: SvnLogRange }> {
+    let current: SvnLogRange | undefined = range;
+    while (current) {
+      const result = await this.cli.run(
+        ['log', '--xml', '--verbose', '--revision', `${current.start}:${current.end}`, '--limit', String(limit), '--', targetUrl],
+        { cwd: this.root.fsPath, token, logStdout: false }
+      );
+      const rawEntries = parseLogXml(result.stdout);
+      const nextRange = nextLogRange(current, rawEntries, limit);
+      // 关键逻辑：--search 会先受 --limit 限制且搜索提交说明等字段，不能作为作者分页游标。
+      const entries = rawEntries.filter((entry) => !author || entry.author.toLowerCase().includes(author.toLowerCase()));
+      if (entries.length > 0 || !nextRange) {
+        return { entries, nextRange };
+      }
+      current = nextRange;
+    }
+    return { entries: [] };
+  }
+
+  /**
+   * 在代码左侧显示或关闭有固定占宽的 SVN Blame，完整信息保留在悬浮提示中。
    *
    * @param resource 要追溯的文件。
    */
   public async showBlame(resource: vscode.Uri): Promise<void> {
+    const request = ++this.blameRequest;
     const resourceKey = resource.toString();
-    const visibleEditor = vscode.window.visibleTextEditors.find(
-      (editor) => editor.document.uri.toString() === resourceKey
-    );
-    if (this.blameResource === resourceKey && visibleEditor) {
-      visibleEditor.setDecorations(this.blameDecoration, []);
+    if (this.blameResource === resourceKey) {
       this.blameResource = undefined;
+      this.blameLines = [];
+      this.renderBlame();
       return;
     }
 
     await this.runOperation('正在读取 SVN Blame', async (token) => {
+      const document = await vscode.workspace.openTextDocument(resource);
+      const version = document.version;
       const result = await this.cli.run(['blame', '--xml', '--', escapeSvnTarget(resource.fsPath)], {
         cwd: this.root.fsPath,
         token,
         logStdout: false
       });
-      const document = await vscode.workspace.openTextDocument(resource);
-      const editor = await vscode.window.showTextDocument(document, { preview: false });
-      const decorations = parseBlameXml(result.stdout)
+      // 关键逻辑：慢查询不能把旧追溯重新贴到已编辑的内容，也不能覆盖用户后发的显示或关闭操作。
+      if (this.disposed || request !== this.blameRequest || document.version !== version) { return; }
+      await vscode.window.showTextDocument(document, { preview: false });
+      if (this.disposed || request !== this.blameRequest || document.version !== version) { return; }
+      this.blameLines = parseBlameXml(result.stdout);
+      this.blameResource = resourceKey;
+      this.renderBlame();
+    }, false);
+  }
+
+  /**
+   * 把缓存追溯应用到当前文件的所有可见编辑器，切换格式时无需再次查询 SVN。
+   */
+  private renderBlame(): void {
+    if (this.disposed) { return; }
+    const style = vscode.workspace.getConfiguration('yfSvn', this.root).get<string>('blameStyle', 'compact') === 'full' ? 'full' : 'compact';
+    for (const editor of vscode.window.visibleTextEditors) {
+      const document = editor.document;
+      const decorations = document.uri.toString() === this.blameResource ? this.blameLines
         .filter((line) => line.lineNumber > 0 && line.lineNumber <= document.lineCount)
         .map((line): vscode.DecorationOptions => {
-          const date = line.date ? new Date(line.date).toLocaleString() : '时间未知';
-          const shortDate = line.date ? line.date.slice(0, 10) : '未知日期';
+          const parsedDate = new Date(line.date);
+          const date = Number.isNaN(parsedDate.getTime()) ? '时间未知' : parsedDate.toLocaleString();
+          const annotation = formatBlameAnnotation(line.revision, line.author, line.date, style);
           const hover = new vscode.MarkdownString();
           hover.appendText(`Revision：r${line.revision}\n\n作者：${line.author}\n\n时间：${date}`);
           return {
@@ -1287,27 +1644,20 @@ export class SvnRepository implements SvnRepositoryOperations {
             ),
             hoverMessage: hover,
             renderOptions: {
-              before: { contentText: `r${line.revision} · ${line.author} · ${shortDate}` }
+              before: { contentText: annotation.text, width: annotation.width }
             }
           };
-        });
-
-      // 关键逻辑：同一仓库仅保留当前文件的追溯装饰，避免旧文件注释长期占用编辑器空间。
-      for (const openEditor of vscode.window.visibleTextEditors) {
-        openEditor.setDecorations(this.blameDecoration, []);
-      }
+        }) : [];
       editor.setDecorations(this.blameDecoration, decorations);
-      this.blameResource = resourceKey;
-      void vscode.window.showInformationMessage(
-        `已在 ${path.basename(resource.fsPath)} 左侧显示 SVN 逐行追溯；再次执行可关闭。`
-      );
-    });
+    }
   }
 
   /**
    * 释放 Source Control Provider 及资源分组。
    */
   public dispose(): void {
+    this.disposed = true;
+    this.uiSubscriptions.forEach((subscription) => subscription.dispose());
     this.blameDecoration.dispose();
     for (const group of this.changelistGroups.values()) {
       group.dispose();
@@ -1347,7 +1697,7 @@ export class SvnRepository implements SvnRepositoryOperations {
       }
     );
     const entries = parseStatusXml(result.stdout, this.root.fsPath);
-    this.statusByPath.clear();
+    const statuses = new Map<string, SvnStatusEntry>();
     const groups = {
       changes: [] as SvnResourceState[],
       unversioned: [] as SvnResourceState[],
@@ -1357,8 +1707,8 @@ export class SvnRepository implements SvnRepositoryOperations {
     };
     const changelists = new Map<string, SvnResourceState[]>();
     for (const entry of entries) {
-      this.statusByPath.set(path.normalize(entry.absolutePath).toLowerCase(), entry);
-      const state = this.createResourceState(entry);
+      const state = await this.createResourceState(entry);
+      statuses.set(path.normalize(entry.absolutePath).toLowerCase(), state?.status ?? entry);
       if (!state) {
         continue;
       }
@@ -1382,12 +1732,18 @@ export class SvnRepository implements SvnRepositoryOperations {
         groups.changes.push(state);
       }
     }
+    // 关键逻辑：异步读取节点类型期间保留旧快照，全部准备完毕后再统一替换菜单和 SCM 状态。
+    this.statusByPath.clear();
+    for (const [key, entry] of statuses) {
+      this.statusByPath.set(key, entry);
+    }
     this.changes.resourceStates = groups.changes;
     this.unversioned.resourceStates = groups.unversioned;
     this.conflicts.resourceStates = groups.conflicts;
     this.ignored.resourceStates = groups.ignored;
     this.externals.resourceStates = groups.externals;
     this.updateChangelistGroups(changelists);
+    this.scannedDepth = depth;
     const changelistCount = [...changelists.values()].reduce(
       (total, states) => total + states.length,
       0
@@ -1432,17 +1788,26 @@ export class SvnRepository implements SvnRepositoryOperations {
    * @param entry SVN 状态条目。
    * @returns 需要展示的 SCM 资源；正常且属性未修改时返回 undefined。
    */
-  private createResourceState(entry: SvnStatusEntry): SvnResourceState | undefined {
+  private async createResourceState(entry: SvnStatusEntry): Promise<SvnResourceState | undefined> {
     if (!isDecoratedStatus(entry)) {
       return undefined;
     }
     const resourceUri = vscode.Uri.file(entry.absolutePath);
+    if (!['unversioned', 'ignored', 'external'].includes(entry.item)) {
+      // 关键逻辑：只为可见的版本化资源读取类型，目录不能执行文件锁、逐行追溯或 Changelist 操作。
+      const stat = await vscode.workspace.fs.stat(resourceUri).then((value) => value, () => undefined);
+      if (stat) {
+        entry = { ...entry, kind: (stat.type & vscode.FileType.Directory) !== 0 ? 'dir' : 'file' };
+      }
+    }
     const diffable =
       !['added', 'unversioned', 'ignored', 'external'].includes(entry.item) &&
       entry.item !== 'missing';
     return {
       resourceUri,
       status: entry,
+      // 关键逻辑：SCM 菜单直接复用资源管理器与编辑器的能力规则，避免仅按分组粗略判断。
+      contextValue: [...getSvnMenuCapabilities(entry)].join(' '),
       command: diffable
         ? {
             command: 'vscode.diff',
@@ -1455,7 +1820,8 @@ export class SvnRepository implements SvnRepositoryOperations {
           }
         : undefined,
       decorations: {
-        tooltip: this.statusTooltip(entry),
+        iconPath: new vscode.ThemeIcon(getStatusIconId(entry), new vscode.ThemeColor(getStatusColorId(entry))),
+        tooltip: getStatusTooltip(entry),
         strikeThrough: entry.item === 'deleted' || entry.item === 'missing',
         faded: entry.item === 'ignored'
       }
@@ -1480,41 +1846,28 @@ export class SvnRepository implements SvnRepositoryOperations {
   }
 
   /**
-   * 生成状态条目的中文悬浮说明。
-   *
-   * @param entry SVN 状态条目。
-   * @returns 中文状态说明。
+   * 汇总已扫描范围的更改与冲突，失败时保留旧计数并提供明确的重试入口。
+   * @param error 本次刷新失败的脱敏说明；省略表示正常或尚未完成首次扫描。
    */
-  private statusTooltip(entry: SvnStatusEntry): string {
-    const names: Record<SvnItemStatus, string> = {
-      added: '已添加',
-      conflicted: '有冲突',
-      deleted: '已删除',
-      external: '外部定义',
-      ignored: '已忽略',
-      incomplete: '不完整',
-      missing: '本地缺失',
-      modified: '已修改',
-      none: '无状态',
-      normal: '正常',
-      obstructed: '路径被阻塞',
-      replaced: '已替换',
-      unversioned: '未版本控制'
-    };
-    const details = [names[entry.item]];
-    if (entry.propertyStatus !== 'none' && entry.propertyStatus !== 'normal') {
-      details.push(`属性：${names[entry.propertyStatus]}`);
-    }
-    if (entry.treeConflicted) {
-      details.push('树冲突');
-    }
-    if (entry.switched) {
-      details.push('已 Switch');
-    }
-    if (entry.changelist) {
-      details.push(`Changelist：${entry.changelist}`);
-    }
-    return details.join('；');
+  private updateStatusBar(error?: string): void {
+    const changes = this.changes.resourceStates.length + [...this.changelistGroups.values()].reduce((total, group) => total + group.resourceStates.length, 0);
+    const unversioned = this.unversioned.resourceStates.length;
+    const conflicts = this.conflicts.resourceStates.length;
+    const count = changes + unversioned + conflicts;
+    const state = error ? '状态已过期' : !this.lastRefresh ? '尚未扫描' : count === 0 ? '无可见更改' : `${count} 项${conflicts ? ` · ${conflicts} 冲突` : ''}`;
+    this.sourceControl.statusBarCommands = [{
+      command: 'yfSvn.refresh',
+      title: `${error || conflicts ? '$(warning)' : '$(source-control)'} SVN · ${path.basename(this.root.fsPath)} · ${state}`,
+      tooltip: [
+        `工作副本：${this.root.fsPath}`,
+        `版本化更改：${changes}；未版本控制：${unversioned}；冲突：${conflicts}`,
+        `扫描深度：${this.scannedDepth}（仅统计已扫描范围）`,
+        `上次成功刷新：${this.lastRefresh?.toLocaleString() ?? '尚未成功扫描'}`,
+        ...(error ? [`状态已过期：${error}`] : []),
+        '单击刷新此工作副本。'
+      ].join('\n'),
+      arguments: [this.root]
+    }];
   }
 
   /**
@@ -1639,38 +1992,56 @@ export class SvnRepository implements SvnRepositoryOperations {
   }
 
   /**
-   * 在可取消进度框中执行写操作，并在结束后刷新状态。
+   * 在可取消进度框中执行操作；写操作按工作副本排队并在结束后刷新状态。
    *
    * @param title 进度框标题。
    * @param operation 接收取消令牌的实际操作。
+   * @param write 是否为需要排队和刷新状态的写操作。
+   * @returns 成功时返回操作结果，失败或取消时返回 undefined。
    */
   private async runOperation<T>(
     title: string,
-    operation: (token: vscode.CancellationToken) => Promise<T>
+    operation: (token: vscode.CancellationToken) => Promise<T>,
+    write = true
   ): Promise<T | undefined> {
     try {
       return await vscode.window.withProgress(
         {
           location: vscode.ProgressLocation.Notification,
-          title,
+          title: `${title.replace(/^正在/, '')} · ${path.basename(this.root.fsPath)}`,
           cancellable: true
         },
-        async (_progress, token) => {
-          const value = await operation(token);
-          await this.refresh();
-          return value;
+        async (progress, token) => {
+          if (!write) {
+            progress.report({ message: '正在执行' });
+            return operation(token);
+          }
+          progress.report({ message: '等待前一项操作完成' });
+          return this.operationQueue.run(async () => {
+            // 关键逻辑：排队期间取消的任务不再执行，也不产生额外刷新。
+            if (token.isCancellationRequested) {
+              throw new vscode.CancellationError();
+            }
+            progress.report({ message: '正在执行' });
+            try {
+              return await operation(token);
+            } finally {
+              // 关键逻辑：失败或取消也可能已修改部分文件，使用独立于操作取消令牌的刷新。
+              progress.report({ message: '正在刷新状态' });
+              try {
+                await this.refresh();
+              } catch {
+                // refresh 已单独提示并标记过期；刷新错误不得覆盖原操作结果。
+              }
+            }
+          });
         }
       );
     } catch (error) {
       if (error instanceof vscode.CancellationError) {
         return undefined;
       }
-      const message = error instanceof Error ? error.message : String(error);
-      this.output.appendLine(`[错误] ${message}`);
-      const action = await vscode.window.showErrorMessage(message, '显示 SVN 输出');
-      if (action === '显示 SVN 输出') {
-        this.output.show();
-      }
+      showSvnError(error, this.output, this.root);
       return undefined;
     }
   }

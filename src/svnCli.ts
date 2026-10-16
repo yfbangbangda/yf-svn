@@ -1,8 +1,7 @@
 import { spawn } from 'node:child_process';
 import * as vscode from 'vscode';
 import { SvnCommandResult } from './types';
-
-const SENSITIVE_OPTIONS = new Set(['--password', '--username']);
+import { redactArguments, redactText } from './redact';
 
 /**
  * 表示一次 SVN 命令执行失败。
@@ -82,13 +81,16 @@ export class SvnCli {
     if (!vscode.workspace.isTrusted) {
       throw new Error('当前工作区尚未受信任，YF SVN 不会执行外部命令。');
     }
+    if (options.token?.isCancellationRequested) {
+      throw new vscode.CancellationError();
+    }
 
     const timeout =
       options.timeout ??
       vscode.workspace.getConfiguration('yfSvn').get<number>('timeout', 120_000);
     const commandArgs = args.includes('--non-interactive') ? [...args] : ['--non-interactive', ...args];
-    const safeArgs = this.redactArguments(commandArgs);
-    this.output.appendLine(`> ${this.executable} ${safeArgs.join(' ')}`);
+    const safeArgs = redactArguments(commandArgs);
+    this.output.appendLine(`> ${redactText(this.executable)} ${safeArgs.join(' ')}`);
 
     return new Promise<SvnCommandResult>((resolve, reject) => {
       const child = spawn(this.executable, commandArgs, {
@@ -105,26 +107,29 @@ export class SvnCli {
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
       let finished = false;
+      let interruption: Error | undefined;
       let cancellation: vscode.Disposable | undefined;
 
-      // 关键逻辑：超时和用户取消都终止同一个子进程，避免残留 svn.exe。
+      // 关键逻辑：先终止进程，再由 close 事件结束 Promise，防止下一写操作抢先启动。
       const timeoutHandle = setTimeout(() => {
-        if (!finished) {
-          finished = true;
-          cancellation?.dispose();
+        if (!finished && !interruption) {
+          interruption = new Error(`SVN 命令执行超过 ${timeout} 毫秒，已终止。`);
           child.kill();
-          reject(new Error(`SVN 命令执行超过 ${timeout} 毫秒，已终止。`));
         }
       }, timeout);
-      cancellation = options.token?.onCancellationRequested(() => {
-        if (!finished) {
-          finished = true;
+      /** 收到取消请求时终止进程，并等待 close 释放工作副本写入占用。 */
+      const cancel = (): void => {
+        if (!finished && !interruption) {
+          interruption = new vscode.CancellationError();
           clearTimeout(timeoutHandle);
-          cancellation?.dispose();
           child.kill();
-          reject(new vscode.CancellationError());
         }
-      });
+      };
+      cancellation = options.token?.onCancellationRequested(cancel);
+      // 关键逻辑：补查启动与监听注册之间的取消，已取消令牌不会再启动后续命令。
+      if (options.token?.isCancellationRequested) {
+        cancel();
+      }
 
       child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk));
       child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
@@ -135,12 +140,12 @@ export class SvnCli {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
           reject(
             new Error(
-              `找不到 SVN 可执行文件“${this.executable}”，请安装 SVN CLI 或配置 yfSvn.path。`
+              `找不到 SVN 可执行文件“${redactText(this.executable)}”，请安装 SVN CLI 或配置 yfSvn.path。`
             )
           );
           return;
         }
-        reject(error);
+        reject(new Error(redactText(error.message)));
       });
       child.once('close', (code) => {
         if (finished) {
@@ -155,6 +160,10 @@ export class SvnCli {
           exitCode: code ?? -1
         };
         this.appendResult(result, options.logStdout !== false);
+        if (interruption) {
+          reject(interruption);
+          return;
+        }
         if (result.exitCode === 0) {
           resolve(result);
           return;
@@ -177,27 +186,6 @@ export class SvnCli {
   }
 
   /**
-   * 将可能包含凭据的参数替换为占位符。
-   *
-   * @param args 原始 SVN 参数。
-   * @returns 可安全写入日志的参数。
-   */
-  private redactArguments(args: readonly string[]): readonly string[] {
-    const result: string[] = [];
-    let hideNext = false;
-    for (const argument of args) {
-      if (hideNext) {
-        result.push('***');
-        hideNext = false;
-        continue;
-      }
-      result.push(argument);
-      hideNext = SENSITIVE_OPTIONS.has(argument);
-    }
-    return result;
-  }
-
-  /**
    * 把命令输出脱敏后写入输出通道。
    *
    * @param result SVN 命令执行结果。
@@ -210,21 +198,9 @@ export class SvnCli {
       .join('\n')
       .trim();
     if (text) {
-      this.output.appendLine(this.redactText(text));
+      this.output.appendLine(redactText(text));
     }
     this.output.appendLine(`[退出码 ${result.exitCode}]`);
-  }
-
-  /**
-   * 对日志正文中的常见凭据字段进行脱敏。
-   *
-   * @param text 待写入输出通道的正文。
-   * @returns 脱敏后的正文。
-   */
-  private redactText(text: string): string {
-    return text
-      .replace(/(password|密码)(\s*[:=]\s*)\S+/gi, '$1$2***')
-      .replace(/(https?:\/\/)([^/\s:@]+):([^@\s/]+)@/gi, '$1***:***@');
   }
 
   /**
@@ -235,7 +211,7 @@ export class SvnCli {
    * @returns 单行错误说明。
    */
   private userFacingError(output: string, exitCode: number): string {
-    const lines = this.redactText(output)
+    const lines = redactText(output)
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter(Boolean);

@@ -2,7 +2,7 @@
   "name": "yf-svn",
   "displayName": "YF SVN",
   "description": "面向 Windows 10/11 的 VS Code Subversion 集成。",
-  "version": "1.2.1",
+  "version": "1.3.4",
   "publisher": "yf",
   "license": "MIT",
   "engines": {
@@ -26,6 +26,7 @@
     "compile": "tsc -p .",
     "watch": "tsc -w -p .",
     "test": "npm run compile && node --test dist/test/**/*.test.js",
+    "test:host": "npm run compile && node dist/test/runHost.js",
     "package": "npm run compile && npx @vscode/vsce package"
   },
   "dependencies": {
@@ -41,6 +42,10 @@
     "submenus": [
       {
         "id": "yfSvn.editorContext",
+        "label": "SVN"
+      },
+      {
+        "id": "yfSvn.explorerContext",
         "label": "SVN"
       }
     ],
@@ -156,6 +161,14 @@
         "title": "SVN: 切换分支/标签"
       },
       {
+        "command": "yfSvn.merge",
+        "title": "SVN: 合并"
+      },
+      {
+        "command": "yfSvn.mergeinfo",
+        "title": "SVN: 查看合并信息"
+      },
+      {
         "command": "yfSvn.updateFile",
         "title": "SVN: 更新文件"
       },
@@ -190,15 +203,18 @@
       },
       {
         "command": "yfSvn.lock",
-        "title": "SVN: 锁定"
+        "title": "SVN: 锁定",
+        "icon": "$(lock)"
       },
       {
         "command": "yfSvn.unlock",
-        "title": "SVN: 解锁"
+        "title": "SVN: 解锁",
+        "icon": "$(unlock)"
       },
       {
         "command": "yfSvn.property",
-        "title": "SVN: 管理属性"
+        "title": "SVN: 管理属性",
+        "icon": "$(settings-gear)"
       },
       {
         "command": "yfSvn.changelist",
@@ -225,11 +241,13 @@
       },
       {
         "command": "yfSvn.log",
-        "title": "SVN: 查看历史"
+        "title": "SVN: 查看历史",
+        "icon": "$(history)"
       },
       {
         "command": "yfSvn.blame",
-        "title": "SVN: 查看逐行追溯"
+        "title": "SVN: 显示/隐藏逐行追溯",
+        "icon": "$(git-commit)"
       },
       {
         "command": "yfSvn.diagnose",
@@ -238,6 +256,23 @@
       {
         "command": "yfSvn.showOutput",
         "title": "SVN: 显示输出"
+      },
+      {
+        "command": "yfSvn.forceLock",
+        "title": "SVN: 强制锁定"
+      },
+      {
+        "command": "yfSvn.forceUnlock",
+        "title": "SVN: 强制解锁"
+      },
+      {
+        "command": "yfSvn.updateAdvanced",
+        "title": "SVN: 高级更新"
+      },
+      {
+        "command": "yfSvn.continueMerge",
+        "title": "SVN: 执行本次合并",
+        "icon": "$(merge)"
       }
     ],
     "menus": {
@@ -268,6 +303,16 @@
           "group": "2_svn@2"
         },
         {
+          "command": "yfSvn.merge",
+          "when": "scmProvider == yfSvn",
+          "group": "2_svn@2.1"
+        },
+        {
+          "command": "yfSvn.mergeinfo",
+          "when": "scmProvider == yfSvn",
+          "group": "2_svn@2.2"
+        },
+        {
           "command": "yfSvn.cleanup",
           "when": "scmProvider == yfSvn",
           "group": "2_svn@3"
@@ -276,6 +321,11 @@
           "command": "yfSvn.log",
           "when": "scmProvider == yfSvn",
           "group": "2_svn@4"
+        },
+        {
+          "command": "yfSvn.updateAdvanced",
+          "when": "scmProvider == yfSvn",
+          "group": "2_svn@0"
         }
       ],
       "scm/resourceGroup/context": [
@@ -288,145 +338,95 @@
       "scm/resourceState/context": [
         {
           "command": "yfSvn.commit",
-          "when": "scmProvider == yfSvn && scmResourceGroup != unversioned && scmResourceGroup != ignored && scmResourceGroup != externals && scmResourceGroup != conflicts",
-          "group": "1_commit@1"
+          "when": "scmProvider == yfSvn && scmResourceState =~ /\\bcommittable\\b/",
+          "group": "2_changes@2"
         },
         {
           "command": "yfSvn.compare",
-          "when": "scmProvider == yfSvn && scmResourceGroup != unversioned && scmResourceGroup != conflicts",
+          "when": "scmProvider == yfSvn && scmResourceState =~ /\\bdiffable\\b/",
           "group": "inline@1"
         },
         {
           "command": "yfSvn.openConflict",
-          "when": "scmProvider == yfSvn && scmResourceGroup == conflicts",
+          "when": "scmProvider == yfSvn && scmResourceState =~ /\\bconflicted\\b/",
           "group": "inline@1"
         },
         {
           "command": "yfSvn.add",
-          "when": "scmProvider == yfSvn && scmResourceGroup == unversioned",
+          "when": "scmProvider == yfSvn && scmResourceState =~ /\\baddable\\b/",
           "group": "inline@2"
         },
         {
           "command": "yfSvn.resolve",
-          "when": "scmProvider == yfSvn && scmResourceGroup == conflicts",
+          "when": "scmProvider == yfSvn && scmResourceState =~ /\\bconflicted\\b/",
           "group": "inline@2"
         },
         {
           "command": "yfSvn.revert",
-          "when": "scmProvider == yfSvn && scmResourceGroup != unversioned && scmResourceGroup != ignored",
-          "group": "2_svn@1"
+          "when": "scmProvider == yfSvn && scmResourceState =~ /\\brevertible\\b/",
+          "group": "2_changes@4"
         },
         {
           "command": "yfSvn.delete",
-          "when": "scmProvider == yfSvn && scmResourceGroup != ignored",
-          "group": "2_svn@2"
+          "when": "scmProvider == yfSvn && scmResourceState =~ /\\bdeletable\\b/",
+          "group": "2_changes@5"
         },
         {
           "command": "yfSvn.rename",
-          "when": "scmProvider == yfSvn && scmResourceGroup != ignored",
-          "group": "2_svn@3"
+          "when": "scmProvider == yfSvn && scmResourceState =~ /\\brenamable\\b/",
+          "group": "2_changes@6"
         },
         {
           "command": "yfSvn.ignore",
-          "when": "scmProvider == yfSvn && scmResourceGroup == unversioned",
-          "group": "2_svn@4"
+          "when": "scmProvider == yfSvn && scmResourceState =~ /\\bignorable\\b/",
+          "group": "2_changes@7"
         },
         {
           "command": "yfSvn.changelist",
-          "when": "scmProvider == yfSvn && scmResourceGroup != unversioned && scmResourceGroup != ignored && scmResourceGroup != externals",
-          "group": "2_svn@5"
+          "when": "scmProvider == yfSvn && scmResourceState =~ /\\bchangelistable\\b/",
+          "group": "5_management@4"
         },
         {
           "command": "yfSvn.lock",
-          "when": "scmProvider == yfSvn && scmResourceGroup != unversioned && scmResourceGroup != ignored && scmResourceGroup != externals",
-          "group": "2_svn@6"
+          "when": "scmProvider == yfSvn && scmResourceState =~ /\\blockable\\b/",
+          "group": "5_management@1"
         },
         {
           "command": "yfSvn.unlock",
-          "when": "scmProvider == yfSvn && scmResourceGroup != unversioned && scmResourceGroup != ignored && scmResourceGroup != externals",
-          "group": "2_svn@7"
+          "when": "scmProvider == yfSvn && scmResourceState =~ /\\bunlockable\\b/",
+          "group": "5_management@2"
         },
         {
           "command": "yfSvn.property",
-          "when": "scmProvider == yfSvn && scmResourceGroup != unversioned && scmResourceGroup != ignored && scmResourceGroup != externals",
-          "group": "2_svn@8"
+          "when": "scmProvider == yfSvn && scmResourceState =~ /\\bmutableVersioned\\b/",
+          "group": "5_management@3"
         },
         {
           "command": "yfSvn.log",
-          "when": "scmProvider == yfSvn && scmResourceGroup != unversioned",
-          "group": "3_history@1"
+          "when": "scmProvider == yfSvn && scmResourceState =~ /\\bhistorical\\b/",
+          "group": "4_history@1"
         },
         {
           "command": "yfSvn.blame",
-          "when": "scmProvider == yfSvn && scmResourceGroup != unversioned",
-          "group": "3_history@2"
+          "when": "scmProvider == yfSvn && scmResourceState =~ /\\bblamable\\b/",
+          "group": "4_history@2"
+        },
+        {
+          "command": "yfSvn.forceLock",
+          "when": "scmProvider == yfSvn && scmResourceState =~ /\\b(lockable|unlockable)\\b/",
+          "group": "6_force@1"
+        },
+        {
+          "command": "yfSvn.forceUnlock",
+          "when": "scmProvider == yfSvn && scmResourceState =~ /\\b(lockable|unlockable)\\b/",
+          "group": "6_force@2"
         }
       ],
       "explorer/context": [
         {
-          "command": "yfSvn.updateFile",
-          "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.updatableResources",
+          "submenu": "yfSvn.explorerContext",
+          "when": "resourceScheme == file && resource in yfSvn.knownResources",
           "group": "svn@1"
-        },
-        {
-          "command": "yfSvn.updateDirectory",
-          "when": "resourceScheme == file && explorerResourceIsFolder && resource in yfSvn.updatableResources",
-          "group": "svn@1"
-        },
-        {
-          "command": "yfSvn.add",
-          "when": "resourceScheme == file && resource in yfSvn.addableResources",
-          "group": "svn@2"
-        },
-        {
-          "command": "yfSvn.commit",
-          "when": "resourceScheme == file && resource in yfSvn.committableResources",
-          "group": "svn@3"
-        },
-        {
-          "command": "yfSvn.revert",
-          "when": "resourceScheme == file && resource in yfSvn.revertibleResources",
-          "group": "svn@4"
-        },
-        {
-          "command": "yfSvn.ignore",
-          "when": "resourceScheme == file && resource in yfSvn.ignorableResources",
-          "group": "svn@5"
-        },
-        {
-          "command": "yfSvn.compare",
-          "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.diffableResources",
-          "group": "svn@6"
-        },
-        {
-          "command": "yfSvn.log",
-          "when": "resourceScheme == file && resource in yfSvn.historicalResources",
-          "group": "svn@7"
-        },
-        {
-          "command": "yfSvn.blame",
-          "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.historicalResources",
-          "group": "svn@8"
-        },
-        {
-          "command": "yfSvn.lock",
-          "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.lockableResources",
-          "group": "svn@9"
-        },
-        {
-          "command": "yfSvn.unlock",
-          "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.unlockableResources",
-          "group": "svn@10"
-        },
-        {
-          "command": "yfSvn.property",
-          "when": "resourceScheme == file && resource in yfSvn.mutableVersionedResources",
-          "group": "svn@11"
-        },
-        {
-          "command": "yfSvn.changelist",
-          "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.mutableVersionedResources",
-          "group": "svn@12"
         }
       ],
       "editor/context": [
@@ -445,57 +445,201 @@
         {
           "command": "yfSvn.add",
           "when": "resource in yfSvn.addableResources",
-          "group": "2_local@1"
+          "group": "2_changes@1"
         },
         {
           "command": "yfSvn.commit",
           "when": "resource in yfSvn.committableResources",
-          "group": "2_local@2"
+          "group": "2_changes@2"
         },
         {
           "command": "yfSvn.revert",
           "when": "resource in yfSvn.revertibleResources",
-          "group": "2_local@3"
+          "group": "2_changes@4"
         },
         {
           "command": "yfSvn.ignore",
           "when": "resource in yfSvn.ignorableResources",
-          "group": "2_local@4"
+          "group": "2_changes@7"
         },
         {
           "command": "yfSvn.compare",
           "when": "resource in yfSvn.diffableResources",
-          "group": "3_history@1"
+          "group": "2_changes@3"
         },
         {
           "command": "yfSvn.log",
           "when": "resource in yfSvn.historicalResources",
-          "group": "3_history@2"
+          "group": "4_history@1"
         },
         {
           "command": "yfSvn.blame",
-          "when": "resource in yfSvn.historicalResources",
-          "group": "3_history@3"
+          "when": "resource in yfSvn.blamableResources",
+          "group": "4_history@2"
         },
         {
           "command": "yfSvn.lock",
           "when": "resource in yfSvn.lockableResources",
-          "group": "4_advanced@1"
+          "group": "5_management@1"
         },
         {
           "command": "yfSvn.unlock",
           "when": "resource in yfSvn.unlockableResources",
-          "group": "4_advanced@2"
+          "group": "5_management@2"
         },
         {
           "command": "yfSvn.property",
           "when": "resource in yfSvn.mutableVersionedResources",
-          "group": "4_advanced@3"
+          "group": "5_management@3"
         },
         {
           "command": "yfSvn.changelist",
-          "when": "resource in yfSvn.mutableVersionedResources",
-          "group": "4_advanced@4"
+          "when": "resource in yfSvn.changelistableResources",
+          "group": "5_management@4"
+        },
+        {
+          "command": "yfSvn.forceLock",
+          "when": "resource in yfSvn.lockableResources || resource in yfSvn.unlockableResources",
+          "group": "6_force@1"
+        },
+        {
+          "command": "yfSvn.forceUnlock",
+          "when": "resource in yfSvn.lockableResources || resource in yfSvn.unlockableResources",
+          "group": "6_force@2"
+        },
+        {
+          "command": "yfSvn.delete",
+          "when": "resource in yfSvn.deletableResources",
+          "group": "2_changes@5"
+        },
+        {
+          "command": "yfSvn.rename",
+          "when": "resource in yfSvn.renamableResources",
+          "group": "2_changes@6"
+        },
+        {
+          "command": "yfSvn.openConflict",
+          "when": "resource in yfSvn.conflictedResources",
+          "group": "3_conflicts@1"
+        },
+        {
+          "command": "yfSvn.resolve",
+          "when": "resource in yfSvn.conflictedResources",
+          "group": "3_conflicts@2"
+        },
+        {
+          "command": "yfSvn.updateAdvanced",
+          "when": "resource in yfSvn.updatableResources",
+          "group": "1_update@2"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "yfSvn.continueMerge",
+          "when": "resourceScheme == yf-svn-merge-preview",
+          "group": "navigation@1"
+        }
+      ],
+      "yfSvn.explorerContext": [
+        {
+          "command": "yfSvn.updateFile",
+          "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.updatableResources",
+          "group": "1_update@1"
+        },
+        {
+          "command": "yfSvn.updateDirectory",
+          "when": "resourceScheme == file && explorerResourceIsFolder && resource in yfSvn.updatableResources",
+          "group": "1_update@1"
+        },
+        {
+          "command": "yfSvn.add",
+          "when": "resourceScheme == file && resource in yfSvn.addableResources",
+          "group": "2_changes@1"
+        },
+        {
+          "command": "yfSvn.commit",
+          "when": "resourceScheme == file && resource in yfSvn.committableResources",
+          "group": "2_changes@2"
+        },
+        {
+          "command": "yfSvn.revert",
+          "when": "resourceScheme == file && resource in yfSvn.revertibleResources",
+          "group": "2_changes@4"
+        },
+        {
+          "command": "yfSvn.ignore",
+          "when": "resourceScheme == file && resource in yfSvn.ignorableResources",
+          "group": "2_changes@7"
+        },
+        {
+          "command": "yfSvn.compare",
+          "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.diffableResources",
+          "group": "2_changes@3"
+        },
+        {
+          "command": "yfSvn.log",
+          "when": "resourceScheme == file && resource in yfSvn.historicalResources",
+          "group": "4_history@1"
+        },
+        {
+          "command": "yfSvn.blame",
+          "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.blamableResources",
+          "group": "4_history@2"
+        },
+        {
+          "command": "yfSvn.lock",
+          "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.lockableResources",
+          "group": "5_management@1"
+        },
+        {
+          "command": "yfSvn.unlock",
+          "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.unlockableResources",
+          "group": "5_management@2"
+        },
+        {
+          "command": "yfSvn.property",
+          "when": "resourceScheme == file && resource in yfSvn.mutableVersionedResources",
+          "group": "5_management@3"
+        },
+        {
+          "command": "yfSvn.changelist",
+          "when": "resourceScheme == file && !explorerResourceIsFolder && resource in yfSvn.changelistableResources",
+          "group": "5_management@4"
+        },
+        {
+          "command": "yfSvn.forceLock",
+          "when": "resourceScheme == file && !explorerResourceIsFolder && (resource in yfSvn.lockableResources || resource in yfSvn.unlockableResources)",
+          "group": "6_force@1"
+        },
+        {
+          "command": "yfSvn.forceUnlock",
+          "when": "resourceScheme == file && !explorerResourceIsFolder && (resource in yfSvn.lockableResources || resource in yfSvn.unlockableResources)",
+          "group": "6_force@2"
+        },
+        {
+          "command": "yfSvn.delete",
+          "when": "resourceScheme == file && resource in yfSvn.deletableResources",
+          "group": "2_changes@5"
+        },
+        {
+          "command": "yfSvn.rename",
+          "when": "resourceScheme == file && resource in yfSvn.renamableResources",
+          "group": "2_changes@6"
+        },
+        {
+          "command": "yfSvn.openConflict",
+          "when": "resourceScheme == file && resource in yfSvn.conflictedResources",
+          "group": "3_conflicts@1"
+        },
+        {
+          "command": "yfSvn.resolve",
+          "when": "resourceScheme == file && resource in yfSvn.conflictedResources",
+          "group": "3_conflicts@2"
+        },
+        {
+          "command": "yfSvn.updateAdvanced",
+          "when": "resourceScheme == file && resource in yfSvn.updatableResources",
+          "group": "1_update@2"
         }
       ]
     },
@@ -541,6 +685,20 @@
           "minimum": 5000,
           "maximum": 1800000,
           "description": "SVN 命令超时时间，单位为毫秒。"
+        },
+        "yfSvn.blameStyle": {
+          "type": "string",
+          "enum": [
+            "compact",
+            "full"
+          ],
+          "enumDescriptions": [
+            "紧凑显示 revision 和作者，左侧固定占宽 24 个字符单位。",
+            "显示 revision、作者和日期，左侧固定占宽 46 个字符单位。"
+          ],
+          "default": "compact",
+          "description": "逐行追溯的显示方式。长内容以省略号收起，悬停可查看完整信息；修改后立即作用于已显示的追溯。",
+          "scope": "resource"
         }
       }
     }

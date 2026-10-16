@@ -3,6 +3,8 @@
 .svn/**
 .vscode/**
 .extension-test/**
+.test-tmp/**
+.vscode-test/**
 src/**
 dist/test/**
 dist/**/*.map

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { SvnManager } from './manager';
-import { getStatusColorId } from './statusDecoration';
+import { getStatusBadge, getStatusColorId, getStatusTooltip } from './statusDecoration';
 
 /**
  * 在 VS Code 资源管理器中按 SVN 状态提供主题自适应颜色。
@@ -35,8 +35,8 @@ export class SvnFileDecorationProvider implements vscode.FileDecorationProvider,
       return undefined;
     }
     return new vscode.FileDecoration(
-      undefined,
-      `SVN：${status.item}`,
+      getStatusBadge(status),
+      `SVN：${getStatusTooltip(status)}`,
       new vscode.ThemeColor(getStatusColorId(status))
     );
   }

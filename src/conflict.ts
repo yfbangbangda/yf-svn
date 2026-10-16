@@ -1,3 +1,20 @@
+import * as path from 'node:path';
+import { SvnStatusEntry } from './types';
+import { isMergeConflict } from './merge';
+
+/**
+ * 找出会阻塞所选文件或目录提交的冲突，不阻止无关路径的部分提交。
+ * @param entries 当前工作副本状态。
+ * @param targets 本次提交的绝对目标路径。
+ * @returns 位于提交目标之内的冲突条目。
+ */
+export function findCommitConflicts(entries: readonly SvnStatusEntry[], targets: readonly string[]): readonly SvnStatusEntry[] {
+  return entries.filter((entry) => isMergeConflict(entry) && targets.some((target) => {
+    const relative = path.win32.relative(target.toLowerCase(), entry.absolutePath.toLowerCase());
+    return !path.win32.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..\\');
+  }));
+}
+
 /**
  * 判断文本中是否仍包含 SVN 冲突标记。
  *

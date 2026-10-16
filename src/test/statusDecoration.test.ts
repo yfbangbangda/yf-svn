@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getStatusColorId, isDecoratedStatus } from '../statusDecoration';
+import { getStatusBadge, getStatusColorId, getStatusIconId, getStatusTooltip, isDecoratedStatus } from '../statusDecoration';
 import { SvnItemStatus, SvnStatusEntry } from '../types';
 
 /**
@@ -45,4 +45,17 @@ test('isDecoratedStatus 排除正常文件并保留属性变化', () => {
   assert.equal(isDecoratedStatus(status('normal')), false);
   assert.equal(isDecoratedStatus(status('normal', 'modified')), true);
   assert.equal(isDecoratedStatus(status('ignored')), true);
+});
+
+test('状态标记、原生图标与中文说明覆盖属性和树冲突，冲突具有最高优先级', () => {
+  assert.equal(getStatusBadge(status('normal')), '');
+  assert.equal(getStatusBadge(status('normal', 'modified')), 'M');
+  assert.equal(getStatusBadge(status('unversioned')), '?');
+  assert.equal(getStatusBadge(status('missing')), '!');
+  assert.equal(getStatusBadge(status('added', 'conflicted')), 'C');
+  assert.equal(getStatusBadge(status('modified', 'none', true)), 'C');
+  assert.equal(getStatusIconId(status('modified', 'none', true)), 'warning');
+  assert.equal(getStatusIconId(status('deleted')), 'diff-removed');
+  assert.equal(getStatusTooltip({ ...status('normal', 'conflicted', true), switched: true, copied: true, locked: true, changelist: '本次修复' }),
+    '正常；属性：有冲突；树冲突；已切换路径；带历史复制；持有文件锁；Changelist：本次修复');
 });

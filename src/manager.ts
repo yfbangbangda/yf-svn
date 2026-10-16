@@ -8,6 +8,11 @@ import { SvnCli } from './svnCli';
 import { SvnRepositoryOperations, SvnResourceState } from './types';
 import { escapeSvnTarget } from './svnTarget';
 import { parseInfoXml } from './xml';
+import { redactText } from './redact';
+import { buildCheckoutArguments } from './checkout';
+import { runInputSteps, SVN_DEPTH_CHOICES, validateRevision } from './inputSteps';
+import { validateMergeSource } from './merge';
+import { showSvnError } from './errorFeedback';
 
 /**
  * 负责发现工作副本、路由命令并管理全部 SVN Repository 实例。
@@ -73,6 +78,15 @@ export class SvnManager implements vscode.Disposable {
   public readonly onDidChangeStatus = this.statusChangeEmitter.event;
 
   /**
+   * 为命令入口展示统一的错误及恢复操作。
+   * @param error 命令产生的异常。
+   * @param root 可选的目标工作副本。
+   */
+  public showError(error: unknown, root?: vscode.Uri): void {
+    showSvnError(error, this.output, root);
+  }
+
+  /**
    * 汇总全部工作副本用于过滤右键菜单的资源集合。
    *
    * @returns 按菜单能力分组并序列化后的资源 URI。
@@ -136,7 +150,7 @@ export class SvnManager implements vscode.Disposable {
       await this.refreshAll();
     } catch (error) {
       this.clearRepositories();
-      const message = error instanceof Error ? error.message : String(error);
+      const message = redactText(error instanceof Error ? error.message : String(error));
       this.output.appendLine(`[初始化失败] ${message}`);
       const action = await vscode.window.showErrorMessage(message, '打开设置', '显示 SVN 输出');
       if (action === '打开设置') {
@@ -155,9 +169,8 @@ export class SvnManager implements vscode.Disposable {
       [...this.repositories.values()].map(async (repository) => {
         try {
           await repository.refresh();
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          this.output.appendLine(`[刷新失败] ${repository.root.fsPath}: ${message}`);
+        } catch {
+          // 关键逻辑：Repository 已标记过期状态并提供重试，不让单个失败影响其他工作副本。
         }
       })
     );
@@ -167,65 +180,51 @@ export class SvnManager implements vscode.Disposable {
    * 执行 SVN Checkout，并在完成后让用户选择是否打开目标目录。
    */
   public async checkout(): Promise<void> {
-    const url = await vscode.window.showInputBox({
-      title: 'SVN Checkout',
-      prompt: '输入仓库 URL',
-      placeHolder: 'https://example.com/svn/project/trunk',
-      ignoreFocusOut: true,
-      validateInput: (value) => (value.trim() ? undefined : '仓库 URL 不能为空。')
-    });
-    if (!url) {
+    const values = await runInputSteps('SVN 检出工作副本', [
+      { key: 'url', prompt: '输入仓库来源 URL', placeholder: 'https://example.com/svn/project/trunk', validate: validateMergeSource },
+      { key: 'destination', prompt: '选择检出目标目录', placeholder: '输入现有目录的绝对路径，或点击浏览按钮', browseFolder: true,
+        validate: async (value) => {
+          if (!path.isAbsolute(value.trim())) {
+            return '请输入目标目录的绝对路径。';
+          }
+          const stat = await vscode.workspace.fs.stat(vscode.Uri.file(value.trim())).then((item) => item, () => undefined);
+          return stat && (stat.type & vscode.FileType.Directory) !== 0 ? undefined : '请选择已存在的目录。';
+        } },
+      { key: 'revision', prompt: '输入检出 revision', placeholder: 'HEAD 或数字 revision', value: 'HEAD', validate: validateRevision },
+      { key: 'depth', prompt: '选择检出深度', placeholder: '选择需要检出的目录范围', value: 'infinity', items: SVN_DEPTH_CHOICES.filter((item) => item.value !== 'working') }
+    ]);
+    if (!values) {
       return;
     }
-    const selectedFolder = await vscode.window.showOpenDialog({
-      title: '选择 Checkout 目标目录',
-      canSelectFiles: false,
-      canSelectFolders: true,
-      canSelectMany: false,
-      openLabel: '选择目录'
-    });
-    const destination = selectedFolder?.[0];
-    if (!destination) {
-      return;
-    }
-    const revision =
-      (await vscode.window.showInputBox({
-        title: 'SVN Checkout',
-        prompt: '输入 revision，默认 HEAD',
-        value: 'HEAD',
-        validateInput: (value) =>
-          value === 'HEAD' || /^\d+$/.test(value) ? undefined : '请输入 HEAD 或数字 revision。'
-      })) ?? '';
-    if (!revision) {
-      return;
-    }
-    const depth = await vscode.window.showQuickPick(
-      ['empty', 'files', 'immediates', 'infinity'],
-      { title: 'SVN Checkout：选择检出深度' }
-    );
-    if (!depth) {
-      return;
-    }
-    const args = [
-      'checkout',
-      '--revision',
+    const url = values.url!.trim();
+    const destination = vscode.Uri.file(values.destination!.trim());
+    const revision = values.revision!.trim();
+    const depth = values.depth!;
+    const args = buildCheckoutArguments(
+      url,
+      destination.fsPath,
       revision,
-      '--depth',
       depth,
-      url.trim(),
-      escapeSvnTarget(destination.fsPath)
-    ];
-    if (vscode.workspace.getConfiguration('yfSvn').get<boolean>('ignoreExternals', false)) {
-      args.splice(args.length - 2, 0, '--ignore-externals');
+      vscode.workspace.getConfiguration('yfSvn').get<boolean>('ignoreExternals', false)
+    );
+
+    const confirmed = await vscode.window.showInformationMessage('确认检出以下 SVN 工作副本？', {
+      modal: true,
+      detail: [`来源：${redactText(url)}`, `目标：${destination.fsPath}`, `Revision：${revision}`, `深度：${depth}`,
+        `忽略 Externals：${args.includes('--ignore-externals') ? '是' : '否'}`].join('\n')
+    }, '检出');
+    if (confirmed !== '检出') {
+      return;
     }
 
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: '正在 Checkout SVN 工作副本',
+        title: `SVN 检出 · ${path.basename(destination.fsPath)}`,
         cancellable: true
       },
-      async (_progress, token) => {
+      async (progress, token) => {
+        progress.report({ message: '正在执行检出' });
         await this.cli.run(args, { cwd: path.dirname(destination.fsPath), token });
       }
     );
@@ -252,12 +251,12 @@ export class SvnManager implements vscode.Disposable {
     this.output.appendLine(`操作系统：${process.platform} ${process.arch} ${os.release()}`);
     this.output.appendLine(`VS Code：${vscode.version}`);
     this.output.appendLine(`工作区信任：${vscode.workspace.isTrusted}`);
-    this.output.appendLine(`SVN 路径：${this.cli.executable}`);
+    this.output.appendLine(`SVN 路径：${redactText(this.cli.executable)}`);
     try {
       const version = await this.cli.ensureSupportedVersion();
       this.output.appendLine(`SVN 版本：${version}`);
     } catch (error) {
-      this.output.appendLine(`SVN 检查失败：${error instanceof Error ? error.message : String(error)}`);
+      this.output.appendLine(`SVN 检查失败：${redactText(error instanceof Error ? error.message : String(error))}`);
     }
     this.output.appendLine(`工作副本数量：${this.repositories.size}`);
     for (const repository of this.repositories.values()) {
@@ -344,7 +343,7 @@ export class SvnManager implements vscode.Disposable {
       return info.workingCopyRoot ? vscode.Uri.file(info.workingCopyRoot) : undefined;
     } catch (error) {
       // 关键逻辑：单个候选目录解析失败不应中断其他工作副本的发现，仅跳过并记录。
-      const message = error instanceof Error ? error.message : String(error);
+      const message = redactText(error instanceof Error ? error.message : String(error));
       this.output.appendLine(`[发现] 跳过无法解析的候选目录 ${candidate}：${message}`);
       return undefined;
     }
@@ -428,11 +427,8 @@ export class SvnManager implements vscode.Disposable {
       this.refreshAllPending = false;
       this.pendingRefreshRepositories.clear();
       // 关键逻辑：普通文件事件只刷新所属工作副本，避免多仓库工作区反复全量扫描。
-      void Promise.all(targets.map((target) => target.refresh())).catch((error: unknown) => {
-        this.output.appendLine(
-          `[自动刷新失败] ${error instanceof Error ? error.message : String(error)}`
-        );
-      });
+      // 每个工作副本独立处理失败，避免重复提示及未处理的 Promise 拒绝。
+      void Promise.all(targets.map((target) => target.refresh().catch(() => {})));
     }, 600);
   }
 }

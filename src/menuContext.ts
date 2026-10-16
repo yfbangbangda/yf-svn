@@ -11,7 +11,12 @@ export const SVN_MENU_CAPABILITIES = [
   'mutableVersioned',
   'lockable',
   'unlockable',
-  'ignorable'
+  'ignorable',
+  'deletable',
+  'renamable',
+  'conflicted',
+  'blamable',
+  'changelistable'
 ] as const;
 
 export type SvnMenuCapability = (typeof SVN_MENU_CAPABILITIES)[number];
@@ -37,11 +42,14 @@ export function getSvnMenuCapabilities(entry: SvnStatusEntry): ReadonlySet<SvnMe
     capabilities.add('ignorable');
     return capabilities;
   }
-  if (['ignored', 'external', 'none', 'obstructed'].includes(entry.item)) {
+  if (!conflicted && ['ignored', 'external', 'none', 'obstructed'].includes(entry.item)) {
     return capabilities;
   }
 
   capabilities.add('known');
+  if (conflicted) {
+    capabilities.add('conflicted');
+  }
   if (
     !conflicted &&
     (['added', 'deleted', 'modified', 'replaced'].includes(entry.item) || propertyChanged)
@@ -59,6 +67,9 @@ export function getSvnMenuCapabilities(entry: SvnStatusEntry): ReadonlySet<SvnMe
   }
   if (!['added', 'incomplete'].includes(entry.item)) {
     capabilities.add('historical');
+    if (entry.kind !== 'dir') {
+      capabilities.add('blamable');
+    }
   }
   if (
     conflicted ||
@@ -67,12 +78,17 @@ export function getSvnMenuCapabilities(entry: SvnStatusEntry): ReadonlySet<SvnMe
   ) {
     capabilities.add('revertible');
   }
-  if (['added', 'normal', 'modified', 'replaced'].includes(entry.item)) {
+  if (!conflicted && ['added', 'normal', 'modified', 'replaced'].includes(entry.item)) {
     capabilities.add('mutableVersioned');
+    if (entry.kind !== 'dir') {
+      capabilities.add('changelistable');
+    }
+    capabilities.add('deletable');
+    capabilities.add('renamable');
   }
-  if (entry.locked) {
+  if (entry.locked && entry.kind !== 'dir') {
     capabilities.add('unlockable');
-  } else if (['normal', 'modified', 'replaced'].includes(entry.item)) {
+  } else if (!conflicted && entry.kind !== 'dir' && ['normal', 'modified', 'replaced'].includes(entry.item)) {
     capabilities.add('lockable');
   }
   return capabilities;

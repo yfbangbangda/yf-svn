@@ -4,6 +4,7 @@ import { SvnFileDecorationProvider } from './fileDecorationProvider';
 import { extractResourceUris, SvnManager } from './manager';
 import { SVN_MENU_CAPABILITIES } from './menuContext';
 import { SvnCli } from './svnCli';
+import { MERGE_PREVIEW_SCHEME, mergePreviews } from './mergePreview';
 
 /**
  * 激活 YF SVN 扩展并注册核心命令。
@@ -20,14 +21,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     output,
     manager,
+    mergePreviews,
     fileDecorationProvider,
     vscode.window.registerFileDecorationProvider(fileDecorationProvider),
     vscode.workspace.registerTextDocumentContentProvider(SVN_CONTENT_SCHEME, contentProvider),
+    vscode.workspace.registerTextDocumentContentProvider(MERGE_PREVIEW_SCHEME, mergePreviews),
     manager.onDidChangeStatus(() => void updateMenuContexts(manager)),
     vscode.commands.registerCommand('yfSvn.showOutput', () => output.show()),
     vscode.commands.registerCommand('yfSvn.diagnose', () => manager.diagnose()),
-    vscode.commands.registerCommand('yfSvn.checkout', () => manager.checkout()),
-    vscode.commands.registerCommand('yfSvn.refresh', () => manager.refreshAll()),
+    vscode.commands.registerCommand('yfSvn.checkout', () => manager.checkout().catch((error: unknown) => manager.showError(error))),
+    vscode.commands.registerCommand('yfSvn.refresh', (...args: unknown[]) =>
+      extractResourceUris(args).length > 0
+        ? withRepository(manager, args, (repository) => repository.refresh().catch(() => {}))
+        : manager.refreshAll()
+    ),
     vscode.commands.registerCommand('yfSvn.commit', (...args: unknown[]) =>
       withRepository(manager, args, (repository, resources) => repository.commit(resources))
     ),
@@ -38,11 +45,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('yfSvn.update', (...args: unknown[]) =>
       withRepository(manager, args, (repository) => repository.update())
     ),
+    vscode.commands.registerCommand('yfSvn.updateAdvanced', (...args: unknown[]) =>
+      withRepository(manager, args, (repository, resources) => repository.update(resources[0], true))
+    ),
     vscode.commands.registerCommand('yfSvn.branchTag', (...args: unknown[]) =>
       withRepository(manager, args, (repository) => repository.branchOrTag())
     ),
     vscode.commands.registerCommand('yfSvn.switch', (...args: unknown[]) =>
       withRepository(manager, args, (repository) => repository.switchBranch())
+    ),
+    vscode.commands.registerCommand('yfSvn.merge', (...args: unknown[]) =>
+      withRepository(manager, args, (repository) => repository.merge())
+    ),
+    vscode.commands.registerCommand('yfSvn.continueMerge', (resource?: unknown) => {
+      const uri = resource instanceof vscode.Uri ? resource : vscode.window.activeTextEditor?.document.uri;
+      const preview = uri ? mergePreviews.get(uri) : undefined;
+      if (!uri || !preview) {
+        void vscode.window.showWarningMessage('请先打开需要继续执行的 SVN 合并预演。');
+        return;
+      }
+      return withRepository(manager, [preview.root], (repository) => repository.continueMerge(uri));
+    }),
+    vscode.commands.registerCommand('yfSvn.mergeinfo', (...args: unknown[]) =>
+      withRepository(manager, args, (repository) => repository.showMergeinfo())
     ),
     vscode.commands.registerCommand('yfSvn.updateFile', (...args: unknown[]) =>
       withRepository(
@@ -85,6 +110,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand('yfSvn.unlock', (...args: unknown[]) =>
       withRepository(manager, args, (repository, resources) => repository.unlock(resources), true)
+    ),
+    vscode.commands.registerCommand('yfSvn.forceLock', (...args: unknown[]) =>
+      withRepository(manager, args, (repository, resources) => repository.lock(resources, true), true)
+    ),
+    vscode.commands.registerCommand('yfSvn.forceUnlock', (...args: unknown[]) =>
+      withRepository(manager, args, (repository, resources) => repository.unlock(resources, true), true)
     ),
     vscode.commands.registerCommand('yfSvn.property', (...args: unknown[]) =>
       withRepository(
@@ -198,7 +229,6 @@ async function withRepository(
   try {
     await action(repository, resources);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    void vscode.window.showErrorMessage(message);
+    manager.showError(error, repository.root);
   }
 }
