@@ -2,7 +2,7 @@
   "name": "yf-svn",
   "displayName": "YF SVN",
   "description": "面向 Windows 10/11 的 VS Code Subversion 集成。",
-  "version": "1.3.4",
+  "version": "1.3.5",
   "publisher": "yf",
   "license": "MIT",
   "engines": {
@@ -39,6 +39,9 @@
     "typescript": "^5.9.2"
   },
   "contributes": {
+    "configurationDefaults": {
+      "scm.repositories.selectionMode": "single"
+    },
     "submenus": [
       {
         "id": "yfSvn.editorContext",

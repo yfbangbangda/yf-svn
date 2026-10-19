@@ -1,4 +1,4 @@
-# YF SVN 1.3.4
+# YF SVN 1.3.5
 
 YF SVN 是面向 Windows 10、Windows 11 和最新版 VS Code 的 Subversion 集成插件。插件通过本机 `svn.exe` 工作，在 VS Code 内提供状态查看、提交、更新、冲突处理和历史追溯等日常 SVN 工作流。
 
@@ -12,7 +12,7 @@ YF SVN 是面向 Windows 10、Windows 11 和最新版 VS Code 的 Subversion 集
 
 ## 安装
 
-在 VS Code 中执行“扩展: 从 VSIX 安装”，选择 `yf-svn-1.3.4.vsix`，然后重新加载窗口。打开包含 `.svn` 的工作区后，插件会自动发现工作副本并注册 Source Control Provider。
+在 VS Code 中执行“扩展: 从 VSIX 安装”，选择 `yf-svn-1.3.5.vsix`，然后重新加载窗口。打开包含 `.svn` 的工作区后，插件会自动发现工作副本并注册 Source Control Provider。
 
 ## 功能
 
@@ -20,6 +20,7 @@ YF SVN 是面向 Windows 10、Windows 11 和最新版 VS Code 的 Subversion 集
 
 - 自动发现多根工作区、嵌套工作副本和 SVN Externals。
 - Source Control 按更改、Changelist、未版本控制、冲突、已忽略和 Externals 分组。
+- “更改 → 更多操作 → 查看和排序 → 存储库”默认使用“选择单个存储库”，对应 VS Code 设置 `scm.repositories.selectionMode: "single"`。这是 SCM 通用默认值，也适用于 Git 等其他提供器；用户或工作区明确设置的选择模式优先。已选择多个存储库时，可通过该菜单切换为单个，或在设置中修改此项。
 - 显示修改、添加、删除、替换、缺失、冲突和忽略等状态。
 - 资源管理器和 SCM 使用主题颜色、状态标记或原生图标区分状态，悬停显示统一中文说明；默认修改为蓝色，未版本控制为黄色。
 - 未版本控制、冲突、已忽略和 Externals 分组为空时自动隐藏，保留“更改”分组作为固定入口。
